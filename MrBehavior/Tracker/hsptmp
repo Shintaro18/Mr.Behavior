@@ -1,0 +1,1711 @@
+//[直すべきところ] layerボタンを押すとROIPENが作動する：ボタン上ではクロスヘア等を表示しない
+//[暇だったら直すべきところ] レイヤーボタンに色を付ける、レイヤー取り込み時の色、左上のスペースは使っていないのに解析してる
+//156x156pixelなら7万frameも可能
+//マニュアル：EnterでInputBoxを選択解除
+
+//入力パラメータ(デフォルト値を変える場合はここを変更)
+動画FPS=30
+解析フレーム数=100	//Total Frame Num<Change here>
+動画長さ=300
+閾値=100	//Color threshold<Change here>
+解析密度=4	//Pixel skip<Change here>
+スキップフレーム数=4	//Frame skip<Change here>
+解析速度=0	//WaittimePerFrame<Change here>
+筆幅=10	//筆の幅初期化
+最低当数=1	//この数以下のpixel数ではマウスを見失ったみなす Minimum pixel num<Change here>
+入力重り紐長=0.0	//重りに繋いだ紐の長さの2乗
+Bin時間=10
+Binフレーム数=0
+
+SplitCorrectMode=0	//1:miniscope mode
+FixX=344	//Width of priginal right part
+FixWidth=135	//Width of priginal left part
+
+//CVX=1280	//1024 (+256)
+//CVY=960		//768 (+192)
+CVX=640	//1024 (+256)
+CVY=480		//768 (+192)
+#include "hspcv.as"		//画像・動画の操作用ライブラリ
+#include "hspext.as"	//フォルダ選択用のライブラリ
+#include "user32.as"	//トグルスイッチ用ライブラリ
+#include "hgimg3.as"	//平方根用
+#define 最大チャネル数 99
+#define 動画左上X 5
+#define 動画左上Y 45
+#define ボタン最大数 40
+#define バッチ選択画面幅 1200
+#define バッチ選択画面高 1000
+
+画面左上X=240	//メイン画面の左上の座標
+画面左上Y=10
+画面幅=1200 //1200 メイン画面のサイズ
+画面高さ=700
+パラ窓X=200	//パラメータ窓のサイズ
+パラ窓Y=800
+
+前画面幅=0
+前画面高さ=0
+ボタン最大数プラス1=ボタン最大数+1
+
+#define debag 0 //自動で動画を読み込ませる場合は1
+screen 0,画面幅,画面高さ,0,画面左上X,画面左上Y			//動画表示画面
+title "Mr. Behavior - Tracker"
+buffer 2,画面幅,画面高さ					//CVコピー用
+buffer 3,画面幅,画面高さ					//画面クリア用
+buffer 4,1,1	//軌跡画像用バッファ
+//buffer5-15はレイヤー
+buffer 96,画面幅,画面高さ+1	//ROIセーブ用
+buffer 97,画面幅,画面高さ	//ROI情報一時避難用
+screen 99,画面幅,画面高さ,0,1225,10	//ﾊﾟﾗﾒｰﾀ表示用
+screen 98,パラ窓X,パラ窓Y,0,5,5	//解析条件入力用
+
+title "Params"
+gsel 98,2
+
+color 255,255,255
+boxf 0,0,画面幅,画面高さ
+gsel 0
+gmode 4,,,100
+dim ButtonLight,30
+//ボタンクラス
+dim ボ使用,ボタン最大数
+dim ボ種類,ボタン最大数	//0:Open,AddChannel,Export 1:□、〇、Pen, 2:Ch layer, 3:Ch selecter, 4:Analyze, 5:Export
+dim ボ左上X,ボタン最大数
+dim ボ左上Y,ボタン最大数
+dim ボ幅,ボタン最大数
+dim ボ高さ,ボタン最大数
+dim ボ状態,ボタン最大数	//1or-1
+dim ボレイヤ,ボタン最大数	//対応するレイヤー
+sdim ボ文字,,ボタン最大数
+dim ボ色,ボタン最大数プラス1,3
+//
+
+dim 解析するか,画面幅,画面高さ	//値が1の場合は色が塗られているため解析する
+ddim 総滞在時間,12
+dim 総移動距離,12
+dim 総侵入回数,12	//areaに入った回数 =EntryNumber
+dim 総接触回数,12	//重心ではなく、当たりpixelがエリアに入った回数
+ddim 総接触時間,12	//重心ではなく、当たりpixelがエリアに入った時間
+ddim 滞在時間Bin,12,1000
+dim 移動距離Bin,12,1000
+dim 侵入回数Bin,12,1000
+dim 接触回数Bin,12,1000
+ddim 接触時間Bin,12,1000
+ddim フレーム毎移動量,10000	//1frame当たりの移動量
+dim 滞在位置X,10000	//マウスの滞在座標
+dim 滞在位置Y,10000
+
+dim 前フレーム居たか,12	//前のフレームにレイヤーに滞在していたか
+ddim 総人押時間,4	//human count
+dim 総人押回数,4	//human count
+ddim 人押時間Bin,4,1000	//human count
+dim 人押回数Bin,4,1000	//human count
+
+dim 人押トリガー,4	//human count
+押=0
+Num=0	//汎用
+SeqPath=""
+単選択ファイル名=""
+
+dim 説明X,13	//説明窓の位置
+dim 説明Y,13
+repeat 13
+	説明Y(cnt)=10000
+loop
+sdim 説明文,13,100	//説明の本文
+説明文(0)="Video frame number per second"
+説明文(1)="Length of the video."
+説明文(2)="Brightness thereshold to detect the subject from background."
+説明文(3)="Minimum number of subject detecting sampling points to move the tracking cursor. "
+説明文(4)="Specify how much to downsample the video resolution (e.g. If 4, the analysis resolution is reduced to 1/4 \nboth vertically and horizontally. If 1, the downsample doesn't take place). Larger downsamples allow for less processing time."
+説明文(5)="Specify how often to thin out the video frames (e.g. If 5, only one frame will be analyzed every five frames. If 1, all frames will be analyzed)."
+説明文(6)="Duration of bin."
+説明文(7)="Wait time per frame during analysis. Set 0 if you want the fastest analysis."
+説明文(8)="Looseness length between center of mass of the subject and the track cursor. \n(Set 0 except when the mouse shows abnormal gait which confounds true moved distance)"
+説明文(9)="Size of ROI Pen and Eraser."
+説明文(10)="Check if the subject is white."
+説明文(11)="If checked, the track cursor stays at the position where the animal is last deteced.\nUncheck this for the Light/Dark chamber test."
+説明文(12)="Check if the subject in on metal grid floor."
+選択説明=-1	//現在ユーザーが選択している説明番号
+今説明番号=0	//現在の説明番号
+説明幅=200	//説明窓の幅
+説明高=50	//説明窓の高さ
+
+repeat 30
+	ButtonLight(cnt)=-1
+loop
+
+文字列長=1000000
+sdim 文字列,文字列長
+sdim 結果,文字列長
+sdim DistancePerFrame,文字列長
+sdim フレーム毎結果,文字列長
+sdim MouseCoordinate,文字列長
+//notesel DistancePerFrame	//それぞれのフレーム当たりの移動距離(pixel)
+//notesel 結果
+
+名前=""
+動画パス=""
+項目名1=""
+項目名2=""
+項目名3=""
+項目名4=""
+項目名5=""
+項目名6=""
+項目名7=""
+結果1=""
+結果2=""
+結果3=""
+結果4=""
+結果5=""
+結果6=""
+結果7=""
+dim 接触時間トリガー,12	//接触時間の処理で使用（毎フレーム初期化される）
+dim 接触回数トリガー,12	//接触回数の処理で使用（接触が全くないフレームでのみ初期化される）
+レイヤボタンX=5
+レイヤ表示ボタンY=580
+レイヤ選択ボタンY=650
+現作製レイヤボタン=0	//=現存しているレイヤ数
+選択レイヤ=1
+選択レイヤ色赤=0
+選択レイヤ色緑=0
+選択レイヤ色青=0
+操作モード=-1
+チャネル数=0
+現バッファ=5	//レイヤーバッファーは5～
+制御チャネル=0
+解析中=0
+解析Cnt=0
+移動量=0
+当X=0	//閾値を越えたピクセルのX座標
+当Y=0	//閾値を越えたピクセルのY座標
+当数=0	//閾値を越えたピクセル数
+現在のBin=0
+
+マウスX=0.0
+マウスY=0.0
+マウスPX=0.0
+マウスPY=0.0
+ポイント輝度=0
+
+始点X = 0
+始点Y = 0
+終点X = 0
+終点Y = 0
+RoiPhase = 0	//0未選択　1始点選択　2終点選択
+RoiX1 = 0
+RoiY1 = 0
+RoiX2 = 0
+RoiY2 = 0
+ボタンシフト = 0
+重りX=0.0		//重りの位置
+重りY=0.0
+重りPX=0.0		//1frame前の重りの位置
+重りPY=0.0
+
+重り紐長二乗=0.0	//重りに繋いだ紐の長さ
+重りマウス距離二乗=0.0	//マウスと重りの距離^2
+重り紐不足分=0.0
+重りマウス角度 = 0.0
+重りマウス角度表示 = 0.0
+最初のマウス=1	//最初だけ項目名を記入する
+Message=0	//1通常解析終了 2バッチ解析終了
+マウスロスト=0
+マウス検出=0
+バッチ解析終了後=0	//1の場合analysisを押すと再びバッチ解析になる
+IsWhiteAnimal=0
+LeaveCursorWhileLost=1
+BackNoiseFilterOn=1
+動画未開=1	//1の場合まだ動画は1つも開いてないという意味
+解析開始中止=0
+試行内検出済=0
+dim LayerExist,11	//1の場合はその点のレイヤーがある
+
+exist "VideoFPS.at"
+if strsize!=-1{
+	bload "VideoFPS.at",動画FPS	//Load
+}
+exist "VideoLength.at"
+if strsize!=-1{
+	bload "VideoLength.at",動画長さ	//Load
+}
+exist "ColorThreshold.at"
+if strsize!=-1{
+	bload "ColorThreshold.at",閾値	//Load
+}
+exist "MinimumPixelNum.at"
+if strsize!=-1{
+	bload "MinimumPixelNum.at",最低当数	//Load
+}
+exist "DownSample.at"
+if strsize!=-1{
+	bload "DownSample.at",解析密度	//Load
+}
+exist "FrameSkip.at"
+if strsize!=-1{
+	bload "FrameSkip.at",スキップフレーム数	//Load
+}
+exist "BinDur.at"
+if strsize!=-1{
+	bload "BinDur.at",Bin時間	//Load
+}
+exist "WaitTimePerFrame.at"
+if strsize!=-1{
+	bload "WaitTimePerFrame.at",解析速度	//Load
+}
+exist "Looseness.at"
+if strsize!=-1{
+	bload "Looseness.at",入力重り紐長	//Load
+}
+exist "PenSize.at"
+if strsize!=-1{
+	bload "PenSize.at",筆幅	//Load
+}
+exist "IsWhiteAnimal.at"
+if strsize!=-1{
+	bload "IsWhiteAnimal.at",IsWhiteAnimal	//Load
+}
+exist "LeaveCursorWhileLost.at"
+if strsize!=-1{
+	bload "LeaveCursorWhileLost.at",LeaveCursorWhileLost	//Load
+}
+exist "BackNoiseFilterOn.at"
+if strsize!=-1{
+	bload "BackNoiseFilterOn.at",BackNoiseFilterOn	//Load
+}
+ProgramPath=dir_cur	//実行プログラムのパスを保持
+a=0
+X=5:Y=5:幅=89:高さ=35
+ボ使用(a)=1:ボ種類(a)=0:ボ左上X(a)=X:ボ左上Y(a)=Y:ボ幅(a)=幅:ボ高さ(a)=高さ:ボ状態(a)=-1:ボ文字(a)="Open(.avi)"	//0
+X+=幅+2+幅+2
+a++
+ボ使用(a)=1:ボ種類(a)=0:ボ左上X(a)=X:ボ左上Y(a)=Y:ボ幅(a)=幅:ボ高さ(a)=高さ:ボ状態(a)=-1:ボ文字(a)="Add Area"	//1
+X+=幅+2
+a++
+ボ使用(a)=1:ボ種類(a)=1:ボ左上X(a)=X:ボ左上Y(a)=Y:ボ幅(a)=幅:ボ高さ(a)=高さ:ボ状態(a)=-1:ボ文字(a)="Rect"			//2
+X+=幅+2
+a++
+ボ使用(a)=1:ボ種類(a)=1:ボ左上X(a)=X:ボ左上Y(a)=Y:ボ幅(a)=幅:ボ高さ(a)=高さ:ボ状態(a)=-1:ボ文字(a)="Circle"			//3
+X+=幅+2
+a++
+ボ使用(a)=1:ボ種類(a)=1:ボ左上X(a)=X:ボ左上Y(a)=Y:ボ幅(a)=幅:ボ高さ(a)=高さ:ボ状態(a)=-1:ボ文字(a)="Pen"		//4
+X+=幅+2
+a++
+ボ使用(a)=1:ボ種類(a)=1:ボ左上X(a)=X:ボ左上Y(a)=Y:ボ幅(a)=幅:ボ高さ(a)=高さ:ボ状態(a)=-1:ボ文字(a)="RectDel"			//5
+X+=幅+2
+a++
+ボ使用(a)=1:ボ種類(a)=1:ボ左上X(a)=X:ボ左上Y(a)=Y:ボ幅(a)=幅:ボ高さ(a)=高さ:ボ状態(a)=-1:ボ文字(a)="CircleDel"			//6
+X+=幅+2
+a++
+ボ使用(a)=1:ボ種類(a)=1:ボ左上X(a)=X:ボ左上Y(a)=Y:ボ幅(a)=幅:ボ高さ(a)=高さ:ボ状態(a)=-1:ボ文字(a)="Eraser"		//7
+X+=幅+2
+a++
+ボ使用(a)=1:ボ種類(a)=0:ボ左上X(a)=X:ボ左上Y(a)=Y:ボ幅(a)=幅:ボ高さ(a)=高さ:ボ状態(a)=-1:ボ文字(a)="SaveArea"	//8
+X+=幅+2
+a++
+ボ使用(a)=1:ボ種類(a)=0:ボ左上X(a)=X:ボ左上Y(a)=Y:ボ幅(a)=幅:ボ高さ(a)=高さ:ボ状態(a)=-1:ボ文字(a)="LoadArea"	//9
+X+=幅+2
+a++
+ボ使用(a)=1:ボ種類(a)=4:ボ左上X(a)=X:ボ左上Y(a)=Y:ボ幅(a)=幅:ボ高さ(a)=高さ:ボ状態(a)=-1:ボ文字(a)="Analyze"	//10
+X+=幅+2
+a++
+ボ使用(a)=1:ボ種類(a)=0:ボ左上X(a)=X:ボ左上Y(a)=Y:ボ幅(a)=幅:ボ高さ(a)=高さ:ボ状態(a)=-1:ボ文字(a)="Export"		//11
+X=5:X+=幅+2
+a++
+ボ使用(a)=1:ボ種類(a)=0:ボ左上X(a)=X:ボ左上Y(a)=Y:ボ幅(a)=幅:ボ高さ(a)=高さ:ボ状態(a)=-1:ボ文字(a)="OpenMulti"	//12
+
+//ボタン設置
+gsel 98
+解析サイズX=0
+解析サイズY=0
+サンプリング数X=0
+サンプリング数Y=0
+ボタンY=30
+シフトY=0
+入力UiX=10
+pos 入力UiX,ボタンY:	input 動画FPS:	ボタンY+=55
+pos 入力UiX,ボタンY:	input 動画長さ:	ボタンY+=55
+pos 入力UiX,ボタンY:	input 閾値:	ボタンY+=55
+pos 入力UiX,ボタンY:	input 最低当数:	ボタンY+=55
+pos 入力UiX,ボタンY:	input 解析密度:	ボタンY+=55
+pos 入力UiX,ボタンY:	input スキップフレーム数:	ボタンY+=55
+pos 入力UiX,ボタンY:	input Bin時間:	ボタンY+=55
+pos 入力UiX,ボタンY:	input 解析速度:	ボタンY+=55
+pos 入力UiX,ボタンY:	input 入力重り紐長:	ボタンY+=55
+pos 入力UiX,ボタンY:	input 筆幅:	ボタンY+=55
+objsize 170, 20
+pos 入力UiX,ボタンY:	chkbox "White animal",IsWhiteAnimal:	ボタンY+=55
+pos 入力UiX,ボタンY:	chkbox "Leave cursor when lose track",LeaveCursorWhileLost:	ボタンY+=55
+pos 入力UiX,ボタンY:	chkbox "Background noise filter",BackNoiseFilterOn:	ボタンY+=55
+
+gsel 0
+//objsize 80,20
+//pos 1000,350:	chkbox "高速モード",chbox
+マウス初検出=1
+最初=1
+gosub *AddChannel	//最初にレイヤー１のみ追加
+最初=0
+今最初のフレーム=1
+dim RoiSaveArray,画面幅,画面高さ+1
+onexit *exit
+
+if Debug=1{	//debugモードの時は決まったパスの動画を起動時に開く
+	gsel 2
+	cls
+	cvbuffer 0,1024,768	//CVバッファ初期化(p1：バッファー番号、p2,3：バッファーサイズ)
+	cvopenavi "G:\\SI\\140222 acb1 SI2\\14年02月22日17時13分-外部入力(1：RX3　)-番組名未取得.avi",0	//aviファイルをバッファー(p2)に開く（後で閉じる必要あり）
+	cvgetavi			//動画のコマをcvバッファーにコピー
+	cvflip 0,0	//画像上下逆転(なぜか上下がさかさまになる為)
+	cvgetimg 0	//buffer2へ画像転送
+	gsel 0
+}
+
+
+REPEAT	//Main Roop
+	//入力**********************************************************************************************************************************
+	mx=ginfo(0)-ginfo(4)-2
+	my=ginfo(1)-ginfo(5)-26
+	stick St
+	stick StNoTrg,256
+	getkey gkZ,90
+	getkey gkX,88
+	getkey gkC,67
+	getkey gkV,86
+	if St = 32{
+		gsel 99,1
+		gsel 0,1
+	}
+	gsel 98
+	mxPara=ginfo(0)-ginfo(4)-2
+	myPara=ginfo(1)-ginfo(5)-26
+	gsel 0
+	if 解析中=0{
+		if st=256{
+			repeat ボタン最大数
+				if ボ使用(cnt)=0:break
+				if mx>=ボ左上X(cnt) & my>=ボ左上Y(cnt) & mx<=ボ左上X(cnt)+ボ幅(cnt) & my<=ボ左上Y(cnt)+ボ高さ(cnt){
+					if ボ種類(cnt)=1{		//□、〇、Pen
+						if ボ状態(cnt)=-1{	//押したボタン以外を非押し状態にする
+							repeat ボタン最大数
+								if ボ種類(cnt)=1:ボ状態(cnt)=-1
+							loop
+							ボ状態(cnt)=1
+							操作モード=cnt
+						}
+					}
+					if ボ種類(cnt)=2{		//Ch layer
+						ボ状態(cnt)*=-1
+					}
+					if ボ種類(cnt)=3{		//Ch selecter
+						if ボ状態(cnt)=-1{	//押したボタン以外を非押し状態にする
+							repeat ボタン最大数
+								if ボ種類(cnt)=3:ボ状態(cnt)=-1
+							loop
+							ボ状態(cnt)=1
+							選択レイヤ=ボレイヤ(cnt)
+						}
+					}
+					if cnt=8{	//レイヤーを保存
+						gosub *SaveROI
+					}
+					if cnt=9{	//レイヤーを開く
+						gosub *LoadROI
+					}
+					if cnt=11{	//エクスポート
+						dialog "",17,
+						if stat=1{	
+							SaveName=refstr
+							SaveName2=""
+							split SaveName, ".", SaveName2
+							
+							notesel 結果
+							notesave SaveName2+"_Result.csv"
+							notesel DistancePerFrame
+							notesave SaveName2+"_DistancePerFrame.csv"
+							notesel フレーム毎結果
+							notesave SaveName2+"_RestingPerArea.csv"
+							notesel MouseCoordinate
+							notesave SaveName2+"_CoordinatePerFrame.csv"
+						}
+					}
+					if cnt=12{	//OpenMultiが押されたら
+						selfolder  SeqPath,"" //
+						if stat=0{
+							screen 6,バッチ選択画面幅,バッチ選択画面高,0,画面左上X,画面左上Y
+							title "Click movie files for the sequence analysis"
+							sdim filename,1000,99	//ファイル名保持用
+							sdim filename2,1000,99	//ファイル名保持用（解析順番）
+							sdim list,16384			//1024
+							dirlist list, SeqPath+"\\*.*",1	//フォルダ内のファイル名を取得しlistへ代入
+							file_num=stat				//↑ファイル数を代入
+							//dialog str(file_num),0,""
+							repeat file_num
+								filename2(cnt)=""
+							loop
+							index=0						//抜き出す最初の位置
+							repeat file_num
+								getstr filename(cnt),list,index,,	//listから改行で区切られた文字列を抜出す
+								index+=strsize			//抜き出した分indexを進める
+							loop
+							color 0,0,0
+							LUX=30		//ファイル名一覧(filename)団の左上座標
+							LUY=30
+							LUX2=620	//ファイル名一覧(filename2)団の左上座標
+							LUY2=30
+							repeat file_num	//ファイル名一覧を描画
+								pos LUX,20*cnt+LUY
+								mes cnt+1
+								pos LUX+20,20*cnt+LUY
+								mes filename(cnt)
+							
+								pos LUX2,20*cnt+LUY2
+								mes cnt+1
+								pos LUX2+20,20*cnt+LUY2
+								mes filename2(cnt)
+							loop
+							now_num=0	//現在の順番（filename2での要素数として使用）
+							repeat	//ファイル名選択時メインループ
+								repeat file_num
+									if filename(cnt)!=""{
+										mx=ginfo(0)-ginfo(4)-3				//マウスの位置取得
+										my=ginfo(1)-ginfo(5)-24
+										stick st,256
+										if st=256{
+											if mx>LUX & mx<LUX+300 & my>20*cnt+LUY & my<20*cnt+LUY+20{
+												filename2(now_num)=filename(cnt)	//名前をfilename2に受け渡す
+												now_num++
+												filename(cnt)=""
+												color 255,255,255
+												boxf 0,0,バッチ選択画面幅,バッチ選択画面高
+												color 0,0,0
+												repeat file_num						//ファイル名一覧を再描画
+													pos LUX,20*cnt+LUY
+													mes cnt+1
+													pos LUX+20,20*cnt+LUY
+													mes filename(cnt)
+							
+													pos LUX2,20*cnt+LUY2
+													mes cnt+1
+													pos LUX2+20,20*cnt+LUY2
+													mes filename2(cnt)
+												loop
+											}
+										}
+									}
+								loop
+								
+								color 100,100,200
+								boxf 20,5,120,25
+								pos 60,7
+								color 0,0,0
+								mes "OK"
+								
+								color 100,100,200
+								boxf 125,5,225,25
+								pos 153,7
+								color 0,0,0
+								mes "Cancel"
+								if (st=256 & mx >=20 & my>=5 & mx<=120 & my<=25) | file_num=now_num{	//OKが押されたら
+									連続解析モード=1
+									連続解析数=0
+									sdim filename,50,99	//ファイル名保持用
+									//screen 6,1200,1000,2,5,5
+									screen 6,1200,1000,2,画面左上X,画面左上Y
+									
+									名前=filename2(0)
+									動画パス=SeqPath+"\\"+filename2(0)
+									gsel 2
+									cls
+									cvcloseavi
+									cvbuffer 0	//CVバッファ初期化(p1：バッファー番号、p2,3：バッファーサイズ)
+									cvopenavi 動画パス,0	//aviファイルをバッファー(p2)に開く（後で閉じる必要あり）
+									cvgetavi			//動画のコマをcvバッファーにコピー
+									gosub *MainWindowResize
+									cvflip 0,0	//画像上下逆転(なぜか上下がさかさまになる為)
+									cvgetimg 0	//buffer2へ画像転送
+									動画未開=0
+									gsel 0
+									break
+								}
+								if st=256 & mx >=125 & my>=5 & mx<=225 & my<=25{	//Cancelが押されたら
+									sdim filename,99	//ファイル名保持用
+									sdim filename2,99	//初期化
+									screen 6,1200,1000,2,5,5
+									break
+								}
+								redraw 1
+								redraw 0
+								await 16
+							loop
+						}
+					}
+					if ボ種類(cnt)=4 & cnt=10{		//Analyzeが押されたら(解析変数初期化もここに書く)
+						if 動画未開=0{
+							gosub *StartAnalysis
+						}
+						if 動画未開=1{
+							dialog "Open movie first",1,""
+						}
+					}
+					if cnt=0:gosub *Open
+					if cnt=1:gosub *AddChannel
+					gsel 99,1
+					gsel 0,1
+				}
+			loop
+		}
+		if StNoTrg=256 & my>45 & mx<画面幅 & my<レイヤ表示ボタンY-25{
+			
+			
+			if 操作モード=2 | 操作モード=3 | 操作モード=5 | 操作モード=6{	//範囲指定（円or四角） taggg
+				gsel 選択レイヤ+4
+				if RoiPhase=0{	//始点クリック
+						始点X = mx
+						始点Y = my
+						RoiPhase=1
+				}
+				if RoiPhase=1{	//ドラッグ中
+						終点X = mx
+						終点Y = my
+				}
+				gsel 0
+			}
+			
+			if 操作モード=4{	//筆塗り
+				if(mx < 画面幅){
+					gsel 選択レイヤ+4
+					gosub *GetSelectedLayerColor
+					repeat 筆幅
+						ocnt=cnt
+						repeat 筆幅
+							pset mx+cnt-(筆幅/2),my+ocnt-(筆幅/2)
+						loop
+					loop
+					//pset mx,my//:pset mx-1,my
+					if 解析サイズX < mx+筆幅-1-筆幅/2: 解析サイズX = mx+筆幅-1-筆幅/2
+					if 解析サイズY < my+筆幅-1-筆幅/2: 解析サイズY = my+筆幅-1-筆幅/2
+					gsel 0
+				}
+			}
+			if 操作モード=7{	//消しゴム
+				gsel 選択レイヤ+4
+				color 0,0,0
+				repeat 筆幅
+					ocnt=cnt
+					repeat 筆幅
+						pset mx+cnt-(筆幅/2),my+ocnt-(筆幅/2)
+					loop
+				loop
+				pset mx,my:pset mx-1,my
+				gsel 0
+			}
+		}
+		if StNoTrg!=256 &RoiPhase = 1{
+			if 操作モード=2 | 操作モード=5{
+				gsel 選択レイヤ+4
+				if 操作モード=2:gosub *GetSelectedLayerColor	//選択レイヤーの色を取得
+				if 操作モード=5:color 0,0,0
+				boxf RoiX2,RoiY2,RoiX1,RoiY1	//四角形描画
+				if 操作モード=2{
+					if 解析サイズX < RoiX1: 解析サイズX = RoiX1
+					if 解析サイズX < RoiX2: 解析サイズX = RoiX2
+					if 解析サイズY < RoiY1: 解析サイズY = RoiY1
+					if 解析サイズY < RoiY2: 解析サイズY = RoiY2
+				}
+				RoiPhase = 0	//ドラッグ終了→ROI決定
+			}
+			if 操作モード=3 | 操作モード=6{
+				gsel 選択レイヤ+4
+				if 操作モード=3:gosub *GetSelectedLayerColor	//選択レイヤーの色を取得
+				if 操作モード=6:color 0,0,0
+				circle RoiX2,RoiY2,RoiX1,RoiY1	//円形描画
+				if 操作モード=3{
+					if 解析サイズX < RoiX1: 解析サイズX = RoiX1
+					if 解析サイズX < RoiX2: 解析サイズX = RoiX2
+					if 解析サイズY < RoiY1: 解析サイズY = RoiY1
+					if 解析サイズY < RoiY2: 解析サイズY = RoiY2
+				}
+				RoiPhase = 0	//ドラッグ終了→ROI決定
+			}
+		}
+	}
+	//処理**********************************************************************************************************************************
+	gsel 0
+	gmode 0
+	pos 0,0:color 0,0,0:gcopy 3,0,0,画面幅,画面高さ	//画面クリア
+	if 解析中=1{
+		gsel 0
+		
+		解析Cnt++
+		現在のBin=(解析Cnt*スキップフレーム数)/(Bin時間*動画FPS)+1
+		if 解析Cnt=0{	//解析開始直後に呼ばれる初期化
+			//重りX=マウスX	//最初に重りの位置をマウスの位置に移動
+			//重りY=マウスY
+			重り紐長二乗=入力重り紐長*入力重り紐長
+		}
+		cvgetavi			//CVバッファに動画のﾌﾚｰﾑ画像を保存
+		Repeat スキップフレーム数-1	//スキップ処理
+			cvgetavi			//CVバッファに動画のﾌﾚｰﾑ画像を保存
+		Loop
+		gsel 2
+		cvflip 0,0
+		cvgetimg 0			//CVバッファーからbuffer2へ画像転送
+		今最初のフレーム=0	//トリガー解除
+		gsel 0
+		gmode 0
+		
+		if SplitCorrectMode=0{
+			pos 動画左上X,動画左上Y
+			gcopy 2,0,0,画面幅,画面高さ	//メイン画面へ画像転送
+		}
+		if SplitCorrectMode=1{
+			pos 動画左上X,動画左上Y
+			gcopy 2,FixX,0,FixWidth,画面高さ	//メイン画面へ画像転送 
+			pos 動画左上X+FixWidth,動画左上Y
+			gcopy 2,0,0,FixX,画面高さ	//メイン画面へ画像転送 
+		}
+		//画像解析ROOP**************************************************************************
+		当数=0
+		当X=0
+		当Y=0
+		サンプリング数X=解析サイズX/解析密度
+		サンプリング数Y=解析サイズY/解析密度
+		
+		Repeat サンプリング数Y	
+			ocnt=cnt
+			Repeat サンプリング数X
+				kcnt=cnt
+				if 解析するか(kcnt*解析密度,ocnt*解析密度)=1{
+					pget kcnt*解析密度,ocnt*解析密度
+					R=ginfo(16):G=ginfo(17):B=ginfo(18)
+					輝度=R+G+B	//輝度を算出
+					if (IsWhiteAnimal = 0 & 輝度<=閾値) | (IsWhiteAnimal = 1 & 輝度>=閾値){	//閾値を越えた場合
+						if BackNoiseFilterOn = 1{	//もし背景ノイズフィルターがオンの場合、周囲8マスに当たりがあるか判定し、2マス以下だったらこのマスはゴミを検出してると見なして当たりを入れない
+							周囲当数=0
+							Trg=0
+							Repeat 8
+								if cnt=0{
+									if ocnt>0{
+										pget kcnt*解析密度,(ocnt-1)*解析密度
+									}
+								}
+								if cnt=1{
+									if kcnt<サンプリング数X & ocnt>0{
+										pget (kcnt+1)*解析密度,(ocnt-1)*解析密度
+									}
+								}
+								if cnt=2{
+									if kcnt<サンプリング数X{
+										pget (kcnt+1)*解析密度,ocnt*解析密度
+									}
+								}
+								if cnt=3{
+									if kcnt<サンプリング数X & ocnt<サンプリング数Y{
+										pget (kcnt+1)*解析密度,(ocnt+1)*解析密度
+									}
+								}
+								if cnt=4{
+									if ocnt<サンプリング数Y{
+										pget kcnt*解析密度,(ocnt+1)*解析密度
+									}
+								}
+								if cnt=5{
+									if kcnt>0 & ocnt<サンプリング数Y{
+										pget (kcnt-1)*解析密度,(ocnt+1)*解析密度
+									}
+								}
+								if cnt=6{
+									if kcnt>0{
+										pget (kcnt-1)*解析密度,ocnt*解析密度
+									}
+								}
+								if cnt=7{
+									if kcnt>0 & ocnt>0{
+										pget (kcnt-1)*解析密度,(ocnt-1)*解析密度
+									}
+								}
+								R=ginfo(16):G=ginfo(17):B=ginfo(18)
+								輝度=R+G+B	//輝度を算出
+								if (IsWhiteAnimal = 0 & 輝度<=閾値) | (IsWhiteAnimal = 1 & 輝度>=閾値){	//閾値を越えた場合
+									周囲当数++
+									if 周囲当数>2{	//もし周囲に3点以上当たりピクセルがあれば
+										Trg=1
+										break
+									}
+								}
+							Loop
+						}
+						if BackNoiseFilterOn = 0{	//もし背景ノイズフィルターがオフの場合
+							Trg=1
+						}
+						if Trg=1{	//このマスが当たりと見なされた場合
+							color 255,255,255
+							pset kcnt*解析密度,ocnt*解析密度
+							当数++
+							当X+=kcnt*解析密度
+							当Y+=ocnt*解析密度
+							Repeat 現作製レイヤボタン	//接触時間、回数をここで処理
+								gsel 5+cnt
+								pget kcnt*解析密度,ocnt*解析密度
+								R=ginfo(16):G=ginfo(17):B=ginfo(18)
+								if R!=0 | G!=0 | B!=0{
+									if 接触時間トリガー(1+cnt) = 0{
+										総接触時間(1+cnt)+=1.0*スキップフレーム数/動画FPS
+										接触時間Bin(1+cnt, 現在のBin)+=1.0*スキップフレーム数/動画FPS
+										接触時間トリガー(1+cnt) = 1
+									}
+									if 接触回数トリガー(1+cnt) = 0{
+										総接触回数(1+cnt)++
+										接触回数Bin(1+cnt, 現在のBin)++
+										接触回数トリガー(1+cnt) = 1
+									}
+								}
+							Loop
+							gsel 0
+						}
+					}
+				}
+			Loop
+		Loop
+		Repeat 現作製レイヤボタン
+			if 接触時間トリガー(1+cnt) = 0{	//全く当たりpixelがなかったら接触がなくなったと見なす
+				接触回数トリガー(1+cnt) = 0
+			}
+			接触時間トリガー(1+cnt) = 0	//トリガー初期化
+		Loop
+		//マウスの位置の解析
+		if 当数>0{
+			マウスX=double(当X/当数)
+			マウスY=double(当Y/当数)
+			if 解析Cnt=0{	//解析開始直後に呼ばれる初期化
+				重りX=マウスX	//最初に重りの位置をマウスの位置に移動
+				重りY=マウスY
+				マウスPX=マウスX
+				マウスPY=マウスY
+			}
+		}
+		//重りの位置を更新
+		if 入力重り紐長{	//紐長が入力されていれば
+				重りPX=重りX
+				重りPY=重りY 
+				重りマウス距離二乗=(重りX-マウスX)*(重りX-マウスX)+(重りY-マウスY)*(重りY-マウスY)
+				if 重り紐長二乗 < 重りマウス距離二乗{	//紐より重りとマウスの距離が長かったら
+					重り紐不足分 = sqrt(重りマウス距離二乗) - sqrt(重り紐長二乗)
+					if 重りX != マウスX || 重りY != マウスY{
+						//角度取得
+						重りマウス角度 = atan(マウスY-重りY, マウスX-重りX)	//y,x
+						重りマウス角度表示 = atan(マウスY-重りY, マウスX-重りX)*180.0/M_PI	//y,x
+					}
+					重りX += cos(重りマウス角度)*重り紐不足分	//重り移動
+					重りY += sin(重りマウス角度)*重り紐不足分
+					
+				}
+		}
+		//マウス及び錘のマーク表示
+		color 255,0,0
+		if 当数>最低当数 | LeaveCursorWhileLost=1{
+			if 入力重り紐長 != 0{
+				color 50,255, 50
+				line 重りX, 重りY, マウスX, マウスY
+				//color 0, 0, 255
+				circle 重りX-4.0,重りY-4.0, 重りX+4.0,重りY+4.0
+				//line 重りX-4,重りY,重りX+4,重りY:	line 重りX,重りY+4,重りX,重りY-4	//重りの位置を十字で表示
+				//color 255, 0, 0
+			}
+			color 255,100,100
+			line マウスX-6.0,マウスY,マウスX+6.0,マウスY:	line マウスX,マウスY+6.0,マウスX,マウスY-6.0	//マウスの位置を十字で表示
+		}
+		//マウス及び重りの座標の記録
+		if 入力重り紐長 = 0{
+			滞在位置X(解析Cnt)=マウスX
+			滞在位置Y(解析Cnt)=マウスY
+		}
+		if 入力重り紐長 != 0{
+			滞在位置X(解析Cnt)=重りX
+			滞在位置Y(解析Cnt)=重りY
+		}
+		//マウス検出=0
+		Repeat 現作製レイヤボタン	//レイヤーでの移動距離、滞在時間等を更新
+			gsel 5+cnt
+			pget マウスX,マウスY
+			R=ginfo(16):G=ginfo(17):B=ginfo(18)
+			if R!=0 | G!=0 | B!=0{	//もしマウスのカーソルがこのレイヤーと重なっていたら
+				if 当数>=最低当数 | 試行内検出済=1 & LeaveCursorWhileLost=1{	//もしマウスのカーソルを表示する場合
+					試行内検出済=1
+					総滞在時間(1+cnt)+=1.0*スキップフレーム数/動画FPS	//総滞在時間増加
+					滞在時間Bin(1+cnt, 現在のBin)+=1.0*スキップフレーム数/動画FPS
+					レイヤ滞在フレーム(1+cnt, 解析Cnt)=1
+					
+					if 入力重り紐長 = 0{
+						fsqr 移動量,((マウスPX-マウスX)*(マウスPX-マウスX)+(マウスPY-マウスY)*(マウスPY-マウスY))
+					}
+					if 入力重り紐長 != 0{
+						fsqr 移動量,((重りPX-重りX)*(重りPX-重りX)+(重りPY-重りY)*(重りPY-重りY))
+					}
+					if 前フレームマウス未検出=1{
+						移動量=0.0
+					}
+					総移動距離(1+cnt)+=移動量	//総移動距離増加
+					移動距離Bin(1+cnt,現在のBin)+=移動量	//総移動距離増加
+					フレーム毎移動量(解析Cnt)=移動量
+					
+					if 前フレーム居たか(1+cnt)=0{
+						総侵入回数(1+cnt)++
+						侵入回数Bin(1+cnt, 現在のBin)++
+						前フレーム居たか(1+cnt)=1
+					}
+					//マウス検出=1
+				}
+			}
+			if R=0 & G=0 & B=0{
+				前フレーム居たか(1+cnt)=0
+			}
+		Loop
+	
+		if 解析Cnt>=1{
+			gsel 4
+			color 0,0,0
+			if マウスPX!=0 & マウスPY!=0:	line マウスX,マウスY,マウスPX,マウスPY	//軌跡描画
+		}
+		gsel 0
+		マウスPX=マウスX
+		マウスPY=マウスY
+		//human count処理(zxcvボタンを押した回数と時間を保持)
+		Repeat 4	//変数は4つ準備
+			押=0
+			if cnt = 0 & gkZ = 1:押=1
+			if cnt = 1 & gkX = 1:押=1
+			if cnt = 2 & gkC = 1:押=1
+			if cnt = 3 & gkV = 1:押=1
+			if 押=1{
+				総人押時間(cnt)+=1.0*スキップフレーム数/動画FPS
+				人押時間Bin(cnt,現在のBin)+=1.0*スキップフレーム数/動画FPS
+				人押フレーム(cnt, 解析Cnt)=1
+				if 人押トリガー(cnt)=0{
+					総人押回数(cnt)++	//前のフレームで押していなかった場合のみ回数が増える
+					人押回数Bin(cnt,現在のBin)++
+					人押トリガー(cnt)=1
+				}
+			}
+			if 押=0{
+				人押トリガー(cnt)=0
+			}
+		Loop
+		
+		//解析終了処理
+		if 解析Cnt>=解析フレーム数-1{	//指定フレーム数に達したら解析終了
+			//dialog ""+現在のBin,0
+			title "1"
+			//総Bin数=現在のBin
+			解析中=0
+			ボ状態(10)=-1
+			前動画パス=動画パス
+			cvcloseavi
+			notesel 結果
+			//1行目
+		
+			文字列+=","
+			Repeat 5
+				Repeat 現作製レイヤボタン
+					文字列+=","
+				Loop
+			Loop
+			Repeat 8
+				文字列+=","
+			Loop
+			
+			Repeat 5
+				if cnt=0:単語="RestingDuration Area"
+				if cnt=1:単語="MovedDistance(pixel) Area"
+				if cnt=2:単語="EntryNum Area"
+				if cnt=3:単語="ContactDuration Area"
+				if cnt=4:単語="ContactNum Area"
+				Repeat 現作製レイヤボタン
+					Num=cnt+1
+					Repeat 総Bin数
+						if cnt=0{
+							文字列+=単語+str(Num)+","
+						}
+						if cnt>=1{
+							文字列+=","
+						}
+					Loop
+				Loop
+			Loop
+			Repeat 2
+				ocnt=cnt
+				Repeat 4 
+					if cnt=0:文字列+="Z "
+					if cnt=1:文字列+="X "
+					if cnt=2:文字列+="C "
+					if cnt=3:文字列+="V "
+					if ocnt=0:文字列+="Duration"
+					if ocnt=1:文字列+="Times"
+					Repeat 総Bin数
+						文字列+=","
+					Loop
+				Loop
+			Loop
+			if 最初のマウス = 1{
+				noteadd 文字列
+			}
+			
+			//2-3行目
+			項目名1+="Name,"
+			結果1+=""+名前+","
+			Repeat 現作製レイヤボタン
+				Num=cnt+1
+				項目名1+="TotalRestingDuration Area"+str(Num)+","
+				項目名2+="TotalDistance(pixel) Area"+str(Num)+","
+				項目名3+="TotalEntryNum Area"+str(Num)+","
+				項目名4+="TotalContactDuration Area"+str(Num)+","
+				項目名5+="TotalContactNum Area"+str(Num)+","
+				
+				結果1+=str(strf("%.2f",総滞在時間(Num)))+","
+				結果2+=str(総移動距離(Num))+","
+				結果3+=str(総侵入回数(Num))+","
+				結果4+=str(strf("%.2f",総接触時間(Num)))+","
+				結果5+=str(総接触回数(Num))+","
+			Loop
+			Repeat 4
+				if cnt=0{
+					項目名6+="Z"
+					項目名7+="Z"
+				}
+				if cnt=1{
+					項目名6+="X"
+					項目名7+="X"
+				}
+				if cnt=2{
+					項目名6+="C"
+					項目名7+="C"
+				}
+				if cnt=3{
+					項目名6+="V"
+					項目名7+="V"
+				}
+				項目名6+=" Duration,"
+				項目名7+=" Times,"
+				
+				結果6+=str(strf("%.2f",総人押時間(cnt)))+","
+				結果7+=str(総人押回数(cnt))+","
+			Loop
+			Repeat 5	//結果項目毎
+				Repeat 現作製レイヤボタン
+					Repeat 総Bin数
+						項目名8+=str(cnt+1)+","
+					Loop
+				Loop
+			Loop
+			Repeat 2	//結果項目毎
+				Repeat 4
+					Repeat 総Bin数
+						項目名9+=str(cnt+1)+","
+					Loop
+				Loop
+			Loop
+			if 最初のマウス = 1{
+				noteadd 項目名1+項目名2+項目名3+項目名4+項目名5+項目名6+項目名7+項目名8+項目名9	//2行目加筆
+				//最初のマウス = 0
+			}
+			//3行目
+			Repeat 5	//結果項目毎
+				oocnt=cnt
+				Repeat 現作製レイヤボタン
+					ocnt=cnt+1
+					Repeat 総Bin数
+						if oocnt=0:結果8+=str(strf("%.2f",滞在時間Bin(ocnt,cnt+1)))+","
+						if oocnt=1:結果8+=str(移動距離Bin(ocnt,cnt+1))+","
+						if oocnt=2:結果8+=str(侵入回数Bin(ocnt,cnt+1))+","
+						if oocnt=3:結果8+=str(strf("%.2f",接触時間Bin(ocnt,cnt+1)))+","
+						if oocnt=4:結果8+=str(接触回数Bin(ocnt,cnt+1))+","
+					Loop
+				Loop
+			Loop
+			title "2"
+			Repeat 2	//人押時間、人押回数
+				oocnt=cnt
+				Repeat 4	//human count z,x,c,v key毎
+					ocnt=cnt
+					Repeat 総Bin数
+						if oocnt=0:結果9+=str(strf("%.2f",人押時間Bin(ocnt,cnt+1)))+","
+						if oocnt=1:結果9+=str(人押回数Bin(ocnt,cnt+1))+","
+					Loop
+				Loop
+			Loop
+			noteadd 結果1+結果2+結果3+結果4+結果5+結果6+結果7+結果8+結果9	//3行目加筆
+
+			title "3"
+			gsel 4
+			文字数=strlen(動画パス)
+			動画パスと名前=strmid(動画パス,0,文字数-4)	//.avi以外をコピー
+			bmpsave 動画パスと名前+".bmp"	//軌跡を保存
+			gsel 0
+			title "4"
+
+
+			//フレーム毎結果
+			if 最初のマウス=1{
+				フレーム毎結果+=","
+				Repeat 解析フレーム数
+					フレーム毎結果+=str(cnt+1)+","
+				Loop
+				フレーム毎結果+="\n"
+			}
+			フレーム毎結果+=名前+"\n"
+			Repeat 現作製レイヤボタン
+				ocnt=cnt
+				フレーム毎結果+="Area "+(ocnt+1)+","
+				Repeat 解析フレーム数
+					フレーム毎結果+=str(レイヤ滞在フレーム(1+ocnt, cnt))+","
+				Loop
+				フレーム毎結果+="\n"
+			Loop
+			title "5"
+			Repeat 4	//human countのrawデータの出力
+				sdim 文字列,文字列長
+				ocnt=cnt
+				if ocnt=0{
+					フレーム毎結果+="Z key,"
+				}
+				if ocnt=1{
+					フレーム毎結果+="X key,"
+				}
+				if ocnt=2{
+					フレーム毎結果+="C key,"
+				}
+				if ocnt=3{
+					フレーム毎結果+="V key,"
+				}
+				Repeat 解析フレーム数
+					フレーム毎結果+=str(人押フレーム(ocnt, cnt))+","
+				Loop
+				フレーム毎結果+="\n"
+			Loop
+			title "6"
+
+			//フレーム毎移動量の記入
+			//DistancePerFrame
+			if 最初のマウス=1{
+				DistancePerFrame+="Name,"
+				Repeat 解析フレーム数
+					DistancePerFrame+=str(cnt+1)+","
+					title "6:"+cnt
+				Loop
+				title "6.1"
+				DistancePerFrame+="\n"
+			}
+			title "7"
+			DistancePerFrame+=名前+","
+			title "8"
+			Repeat 解析フレーム数
+				DistancePerFrame+=str(フレーム毎移動量(cnt))+","	//移動量を記入
+				title "8:"+cnt
+			Loop
+			title "9"
+			DistancePerFrame+="\n"
+			title "10"
+
+			
+			//マウス座標の記入
+			//MouseCoordinate
+			if 最初のマウス=1{
+				MouseCoordinate+=","
+				Repeat 解析フレーム数
+					MouseCoordinate+=str(cnt+1)+","
+				Loop
+				MouseCoordinate+="\n"
+			}
+			MouseCoordinate+=名前
+			MouseCoordinate+="\n"
+			Repeat 2
+				if cnt=0{
+					MouseCoordinate+="X:,"
+					Repeat 解析フレーム数
+						MouseCoordinate+=str(滞在位置X(cnt))+","	//移動量を記入
+					Loop
+				}
+				if cnt=1{
+					MouseCoordinate+="Y:,"
+					Repeat 解析フレーム数
+						MouseCoordinate+=str(滞在位置Y(cnt))+","	//移動量を記入
+					Loop
+				}
+				MouseCoordinate+="\n"
+			Loop
+
+			title "11"
+			if 連続解析モード=0{
+				Message=1
+				//dialog "Analysis is finished",0
+			}
+			if 連続解析モード=1{	//もし連続解析モードであれば
+				連続解析数++
+				if 連続解析数 < now_num{	//まだ未解析動画が残っていれば
+					名前=filename2(連続解析数)
+					動画パス=SeqPath+"\\"+filename2(連続解析数)
+					gsel 2
+					cls
+					cvcloseavi
+					cvbuffer 0	//CVバッファ初期化(p1：バッファー番号、p2,3：バッファーサイズ)
+					cvopenavi 動画パス,0	//aviファイルをバッファー(p2)に開く（後で閉じる必要あり）
+					cvgetavi			//動画のコマをcvバッファーにコピー
+					gosub *MainWindowResize
+					cvflip 0,0	//画像上下逆転(なぜか上下がさかさまになる為)
+					cvgetimg 0	//buffer2へ画像転送
+					gsel 0
+					gosub *StartAnalysis
+				}
+				if 連続解析数 = now_num{	//もし全ての動画を解析し終わっていたら
+					//連続解析モード=0
+					連続解析数=0
+					//redraw 1
+					//redraw 0
+					Message=2
+					//dialog "Batch analysis is finished",0
+					解析中=0
+					バッチ解析終了後=1
+				}
+			}
+			最初のマウス=0
+		}
+	}
+	//描画**********************************************************************************************************************************
+	gsel 0
+	if 解析中=0{
+		gmode 0
+		pos 動画左上X,動画左上Y
+		
+		if SplitCorrectMode=0{
+			pos 動画左上X,動画左上Y
+			gcopy 2,0,0,画面幅,画面高さ	//メイン画面へ画像転送 
+		}
+		if SplitCorrectMode=1{
+			pos 動画左上X,動画左上Y
+			gcopy 2,FixX,0,FixWidth,画面高さ	//メイン画面へ画像転送 
+			pos 動画左上X+FixWidth,動画左上Y
+			gcopy 2,0,0,FixX,画面高さ	//メイン画面へ画像転送 
+		}
+		
+		pget mx,my
+		R=ginfo(16):G=ginfo(17):B=ginfo(18)
+		ポイント輝度=R+G+B
+	}
+	
+	//color 0,0,0:pos 5,555:	mes "View"	//
+	color 0,0,0: pos 5,レイヤ表示ボタンY-25:	mes "View"
+	//color 0,0,0:pos 5,625:	mes "Control"
+	color 0,0,0: pos 5,レイヤ選択ボタンY-25:	mes "Control"
+
+	gcopy 3,0,0,パラ窓X,パラ窓Y
+	gsel 98
+	入力UiX = 5
+	シフトY = 5
+	//入力UiX=1180
+	今説明番号=0
+	color 0,0,0
+	pos 入力UiX,シフトY:	mes "Video FPS":				説明X(今説明番号)=入力UiX:	説明Y(今説明番号)=シフトY:	今説明番号++:	シフトY+=55
+	pos 入力UiX,シフトY:	mes "Video length(sec)":		説明Y(今説明番号)=シフトY:	今説明番号++:	シフトY+=55
+	pos 入力UiX,シフトY:	mes "Color threshold(0-765)":	説明Y(今説明番号)=シフトY:	今説明番号++:	シフトY+=55
+	pos 入力UiX,シフトY:	mes "Minimum pixel num"	:		説明Y(今説明番号)=シフトY:	今説明番号++:	シフトY+=55
+	pos 入力UiX,シフトY:	mes "Resol. down-sample(1-)":	説明Y(今説明番号)=シフトY:	今説明番号++:	シフトY+=55
+	pos 入力UiX,シフトY:	mes "Frame down-sample(1-)":	説明Y(今説明番号)=シフトY:	今説明番号++:	シフトY+=55
+	pos 入力UiX,シフトY:	mes "Bin duration(sec)"	:		説明Y(今説明番号)=シフトY:	今説明番号++:	シフトY+=55
+	pos 入力UiX,シフトY:	mes "WaitTime(ms)/frame (0-)":	説明Y(今説明番号)=シフトY:	今説明番号++:	シフトY+=55
+	pos 入力UiX,シフトY:	mes "Looseness length(0-)":		説明Y(今説明番号)=シフトY:	今説明番号++:	シフトY+=55
+	pos 入力UiX,シフトY:	mes "Pen size":					説明Y(今説明番号)=シフトY:	今説明番号++:	シフトY+=55
+	説明Y(今説明番号)=シフトY:	今説明番号++:	シフトY+=55
+	説明Y(今説明番号)=シフトY:	今説明番号++:	シフトY+=55
+	gsel 0
+	
+	表示=0
+	repeat 現作製レイヤボタン	//レイヤ描画
+		ocnt=cnt+1
+		repeat ボタン最大数
+			if ボ種類(cnt)=2 & ボレイヤ(cnt)=ocnt & ボ状態(cnt)=1{
+				表示=1
+			}
+		loop
+		if 表示=1{
+			pos 0,0
+			a=cnt+5
+			color 0,0,0
+			gmode 4,,,50
+			gcopy a,0,0,画面幅,画面高さ
+		}
+		表示=0
+	loop
+	if 操作モード=4 | 操作モード=7{
+		if mx>0 & mx<画面幅 & my>45 & my<レイヤ表示ボタンY-25{
+			color 0,0,0	
+			line mx+筆幅/2,my-筆幅/2,mx-筆幅/2,my-筆幅/2	//筆の描画範囲表示
+			line mx+筆幅/2,my+筆幅/2
+			line mx-筆幅/2,my+筆幅/2
+			line mx-筆幅/2,my-筆幅/2
+		}
+	}
+	if 操作モード=2 & RoiPhase=1 | 操作モード=5 & RoiPhase=1{	//四角描画
+		RoiX1 = 始点X
+		RoiY1 = 始点Y
+		RoiX2 = 終点X
+		RoiY2 = 終点Y
+		color 0,0,0
+		line RoiX2, RoiY1,RoiX1, RoiY1	//描画
+		line RoiX2, RoiY2
+		line RoiX1, RoiY2
+		line RoiX1, RoiY1
+		pos mx,my-20
+		mes "r="+(終点X-始点X)+","+(終点Y-始点Y)+" (pixel)"
+	}
+	if 操作モード=3 & RoiPhase=1 | 操作モード=6 & RoiPhase=1{	//円描画
+		RoiX1 = 始点X-(終点X-始点X)
+		RoiY1 = 始点Y-(終点Y-始点Y)
+		RoiX2 = 終点X//-(始点X-終点X)/2
+		RoiY2 = 終点Y//-(始点Y-終点Y)/2
+		color 0,0,0
+		circle  RoiX2, RoiY2, RoiX1, RoiY1,0	//描画
+		pos mx,my-20
+		mes "r="+(RoiX2-RoiX1)/2+","+(RoiY2-RoiY1)/2+" (pixel)"
+	}
+	
+	repeat ボタン最大数
+		if ボ使用(cnt)=0:break
+		if ボ状態(cnt)=-1:color 200,200,200
+		if ボ状態(cnt)=1:color 0,0,0
+		boxf ボ左上X(cnt),ボ左上Y(cnt),ボ左上X(cnt)+ボ幅(cnt),ボ左上Y(cnt)+ボ高さ(cnt)
+		pos ボ左上X(cnt)+5,ボ左上Y(cnt)+5
+		if ボ状態(cnt)=-1:color 0,0,0
+		if ボ状態(cnt)=1:color 255,255,255
+		mes ""+ボ文字(cnt)
+	loop
+	//title "ポインタ座標 x:"+mx+" y:"+my+" 選択レイヤ"+選択レイヤ+" 操作モード"+操作モード+" 解析中"+解析中+"RoiPhase"+RoiPhase+選択レイヤ色赤+" 重りマウス角度表示:"+重りマウス角度表示+" マウスx:"+マウスx+" d:"+重りマウス距離二乗
+	//title "CurrentFrame:"+解析Cnt+"  Cursor X:"+mx+" Y:"+my+"  Mice coordinate X:"+int(マウスx)+" Y:"+int(マウスy)+"  Weight coordinate X:"+int(重りX)+" Y:"+int(重りY)
+	//title ""+項目名1
+	
+	選択説明=-1
+	REPEAT 13
+		if mxPara>=説明X(0) & myPara>=説明Y(cnt) & mxPara<=説明X(0)+説明幅 & myPara<=説明Y(cnt)+説明高{
+			選択説明=cnt
+			break
+		}
+	LOOP
+	if 選択説明!=-1{
+		color 240,240,240
+		boxf 5,500,画面幅-5,550
+		color 0,0,0
+		pos 10,503
+		mes ""+説明文(選択説明)
+	}
+	color 0,0,0
+	if mx>0 & mx<画面幅 & my>45 & my<レイヤ表示ボタンY-25{
+		line mx-10,my,mx+10,my	//cross hair描画
+		line mx,my-10,mx,my+10
+		if mx < 画面幅-50{
+			pos mx+10,my+10
+		}
+		if mx >= 画面幅-50{
+			pos mx-80,my+10
+		}
+		mes "("+mx+","+my+")"
+	}
+
+	redraw 1
+	redraw 0
+	
+	
+	gsel 99
+	gmode 0
+	pos 0,0:color 0,0,0:gcopy 3,0,0,画面幅,画面高さ	//画面クリア
+	
+	color 0,0,0
+	pos 5,5
+	
+	if 解析中=1{
+		mes "Current frame num: "+(解析Cnt+1)+" / "+解析フレーム数
+	}
+	//↓debug用
+	//mes "現作製レイヤボタン:	"+現作製レイヤボタン
+	//mes "Total analyzed pixel num:	"+解析ピクセル総数
+	//mes "画面幅:			"+画面幅
+	//mes "画面高さ:		"+画面高さ
+	//mes "解析サイズX:		"+解析サイズX
+	//mes "解析サイズY:		"+解析サイズY
+	//mes "解析密度:		"+解析密度
+	//mes "mxPara:		"+mxPara;
+	//mes "myPara:		"+myPara
+	mes "Movie size x:"+CVX+" y:"+CVY
+	mes "Mice pixel num: "+当数
+	
+	Repeat 現作製レイヤボタン
+		mes "Area"+(cnt+1)+"  Resting: "+strf("%.2f",総滞在時間(cnt+1))+" sec  MovedDistance: "+総移動距離(cnt+1)+"  EntryNum: "+総侵入回数(cnt+1)+"  Contact: "+strf("%.2f",総接触時間(cnt+1))+" sec  ContactNum: "+総接触回数(cnt+1)
+	Loop
+	mes "Human count"
+	Repeat 4
+		if cnt=0: mes "  Zkey:"+strf("%.2f",総人押時間(cnt))+" sec  times:"+総人押回数(cnt)
+		if cnt=1: mes "  Xkey:"+strf("%.2f",総人押時間(cnt))+" sec  times:"+総人押回数(cnt)
+		if cnt=2: mes "  Ckey:"+strf("%.2f",総人押時間(cnt))+" sec  times:"+総人押回数(cnt)
+		if cnt=3: mes "  Vkey:"+strf("%.2f",総人押時間(cnt))+" sec  times:"+総人押回数(cnt)
+	Loop
+	mes "Mouse cursor\n  x: "+mx+"  y: "+my
+	mes "Color intensity(R+G+B): "+ポイント輝度
+	
+	mes "Data path:"
+	mes 動画パス
+	title "Result window"
+	redraw 1
+	redraw 0
+	if 解析中=0:await 1
+	if 解析中=1:await 解析速度
+	gsel 0
+	title "Mr. Behavior - Tracker"
+	if Message=1{
+		//dialog "Analysis is finished",0
+		Message=0
+		//前連続解析モード=0
+	}
+	if Message=2{
+		dialog "Batch analysis is finished",0
+		Message=0
+		//前連続解析モード=1
+	}
+	前フレームマウス未検出=0
+	if 当数 < 最低当数 | 当数 <= 0{
+		前フレームマウス未検出=1
+	}
+LOOP
+	
+*Open
+	dialog "avi", 16, "avi movie"
+	if stat = 1{
+		動画パス=refstr
+		split 動画パス, "\\", 単選択ファイル名
+		名前=単選択ファイル名(stat-1)
+
+		gsel 2
+		cls
+		cvcloseavi
+		//cvbuffer 0,CVX,CVY	//CVバッファ初期化(p1：バッファー番号、p2,3：バッファーサイズ)
+		cvbuffer 0
+		cvopenavi refstr,0	//aviファイルをバッファー(p2)に開く（後で閉じる必要あり）
+		cvgetavi			//動画のコマをcvバッファーにコピー
+		gosub *MainWindowResize
+		//gsel 0
+		cvflip 0,0	//画像上下逆転(なぜか上下がさかさまになる為)
+		cvgetimg 0	//buffer2へ画像転送
+
+		動画未開=0
+		今最初のフレーム=1
+		
+		gsel 0
+		連続解析モード=0
+		バッチ解析終了後=0
+	}
+	return
+
+*MainWindowResize	//
+	cvgetinfo CVX,0,CVOBJ_INFO_SIZEX	//動画に合わせてサイズが変わったCV bufferのサイズを保持
+	cvgetinfo CVY,0,CVOBJ_INFO_SIZEY
+	前画面幅=画面幅
+	前画面高さ=画面高さ
+	画面幅=CVX+10
+	画面高さ=CVY+220
+	if 画面幅<1200{
+		画面幅=1200	//最低このサイズにする
+	}
+	if 画面高さ<700{
+		//画面高さ=700
+	}
+	レイヤ表示ボタンY = CVY+100
+	レイヤ選択ボタンY = CVY+170
+	Repeat ボタン最大数
+		if ボ使用(cnt)=1{
+			if ボ種類(cnt)=2{
+				ボ左上Y(cnt)=レイヤ表示ボタンY
+			}
+			if ボ種類(cnt)=3{
+				ボ左上Y(cnt)=レイヤ選択ボタンY
+			}
+		}
+	Loop
+	gsel 0
+	画面左上X=ginfo(4): 画面左上Y=ginfo(5)
+	screen 0,画面幅,画面高さ,0,画面左上X,画面左上Y
+	screen 3,画面幅,画面高さ
+	dim 解析するか,画面幅,画面高さ
+	buffer 97,画面幅,画面高さ
+	Repeat 12
+		if cnt=現バッファ-5{
+			break
+		}
+		gsel 97
+		color 0,0,0
+		boxf 0,0,画面幅,画面高さ
+		pos 0,0
+		gcopy cnt+5,0,0,前画面幅,前画面高さ	//ROI情報一時避難
+		//gcopy cnt+5,0,0,1000,1000
+		buffer cnt+5,画面幅,画面高さ
+		boxf 0,0,画面幅,画面高さ
+		gsel cnt+5
+		pos 0,0
+		gcopy 97,0,0,前画面幅,前画面高さ	//ROI情報復元
+	Loop
+	gsel 2
+	buffer 2,CVX,CVY
+	return
+	
+*AddChannel
+	if 現作製レイヤボタン < 11{
+		repeat ボタン最大数
+			if ボ使用(cnt)=0{
+				現作製レイヤボタン++
+				if 現作製レイヤボタン=1{R=0:R=255:B=0}
+				if 現作製レイヤボタン=2{R=0:R=0:B=255}
+				if 現作製レイヤボタン=3{R=149:R=0:B=181}
+				if 現作製レイヤボタン=4{R=255:R=242:B=0}
+				if 現作製レイヤボタン=5{R=255:R=242:B=0}
+				if 現作製レイヤボタン=6{R=255:R=108:B=0}
+				if 現作製レイヤボタン=7{R=11:R=255:B=249}
+				if 現作製レイヤボタン=8{R=0:R=3:B=132}
+				if 現作製レイヤボタン=9{R=255:R=36:B=255}
+				if 現作製レイヤボタン=10{R=140:R=151:B=149}
+				if 現作製レイヤボタン=11{R=45:R=47:B=47}
+				ボ使用(cnt)=1:	ボ種類(cnt)=2:	ボ左上X(cnt)=レイヤボタンX:		ボ左上Y(cnt)=レイヤ表示ボタンY:ボ幅(cnt)=100:		ボ高さ(cnt)=30:		ボ状態(cnt)=1:		ボ文字(cnt)="Area"+現作製レイヤボタン:	ボレイヤ(cnt)=現作製レイヤボタン	:ボ色(cnt,0)=R	:ボ色(cnt,1)=G	:ボ色(cnt,2)=B
+				if 最初=1:ボ状態(cnt)=1
+				ボ使用(cnt+1)=1:ボ種類(cnt+1)=3:ボ左上X(cnt+1)=レイヤボタンX:	ボ左上Y(cnt+1)=レイヤ選択ボタンY:ボ幅(cnt+1)=100:	ボ高さ(cnt+1)=30:	ボ状態(cnt+1)=-1:	ボ文字(cnt+1)="Area"+現作製レイヤボタン:	ボレイヤ(cnt+1)=現作製レイヤボタン:	
+				ボ色(cnt+1,0)=R:ボ色(cnt+1,1)=G:ボ色(cnt+1,2)=B
+				if 最初=1:ボ状態(cnt+1)=1
+				レイヤボタンX+102
+				buffer 現バッファ,画面幅,画面高さ
+				color 0,0,0:boxf 0,0,画面幅,画面高さ
+				gsel 0
+				現バッファ++
+
+				repeat ボタン最大数
+					if ボ使用(cnt)=1 & ボ種類(cnt)=3{
+						ボ状態(cnt)=-1
+					}
+				loop
+				ボ状態(cnt+1)=1
+				選択レイヤ=ボレイヤ(cnt)
+
+				break
+			}
+		loop
+	}
+	
+	return
+
+*GetSelectedLayerColor
+	if 選択レイヤ=1:color 255,0,0
+	if 選択レイヤ=2:color 0,255,0
+	if 選択レイヤ=3:color 0,0,255
+	if 選択レイヤ=4:color 149,0,181
+	if 選択レイヤ=5:color 255,242,0
+	if 選択レイヤ=6:color 255,108,0
+	if 選択レイヤ=7:color 11,255,249
+	if 選択レイヤ=8:color 0,3,132
+	if 選択レイヤ=9:color 255,36,255
+	if 選択レイヤ=10:color 140,151,149
+	if 選択レイヤ=11:color 45,47,47
+	選択レイヤ色赤=ginfo(16)
+	選択レイヤ色緑=ginfo(17)
+	選択レイヤ色青=ginfo(18)
+	return
+
+*SaveParameters
+	chdir ProgramPath
+	bsave "VideoFPS.at",動画FPS
+	bsave "VideoLength.at",動画長さ
+	bsave "ColorThreshold.at",閾値
+	bsave "MinimumPixelNum.at",最低当数
+	bsave "DownSample.at",解析密度
+	bsave "FrameSkip.at",スキップフレーム数
+	bsave "BinDur.at",Bin時間
+	bsave "WaitTimePerFrame.at",解析速度
+	bsave "Looseness.at",入力重り紐長
+	bsave "PenSize.at",筆幅
+	bsave "IsWhiteAnimal.at",IsWhiteAnimal
+	bsave "LeaveCursorWhileLost.at",LeaveCursorWhileLost
+	bsave "BackNoiseFilterOn.at",BackNoiseFilterOn
+	return
+
+*StartAnalysis
+	解析開始中止=0
+	解析Cnt=-1	
+	//解析フレーム数=入力解析フレーム数/スキップフレーム数
+	解析フレーム数=動画FPS*動画長さ/スキップフレーム数
+	総Bin数=(解析フレーム数*スキップフレーム数)/(Bin時間*動画FPS)+1
+	if バッチ解析終了後=1{	//同じバッチの2回目の解析の場合の初期化
+		名前=filename2(0)
+		動画パス=SeqPath+"\\"+filename2(0)
+	}
+
+	gsel 2
+	cls
+	cvcloseavi
+	cvbuffer 0	//CVバッファ初期化(p1：バッファー番号、p2,3：バッファーサイズ)
+	cvopenavi 動画パス,0	//aviファイルをバッファー(p2)に開く（後で閉じる必要あり）
+		
+	
+	Repeat 画面高さ
+		ocnt=cnt
+		Repeat 画面幅
+			解析するか(cnt,ocnt)=0	//初期化
+		Loop
+	Loop
+	解析サイズX=0
+	解析サイズY=0
+	試行内検出済=0
+	Repeat 現作製レイヤボタン	//色のついた座標を把握する処理
+		a=5+cnt
+		gsel a
+		Repeat 画面高さ/解析密度
+			ocnt=cnt
+			Repeat 画面幅/解析密度
+				pget cnt*解析密度,ocnt*解析密度
+				r=ginfo(16):g=ginfo(17):b=ginfo(18)
+				if r!=0|g!=0|b!=0{	//もし色が付いている場合は
+					解析するか(cnt*解析密度,ocnt*解析密度)=1	//その座標を解析ピクセル指定(この処理により色が付いていないピクセルにあたり判定は付かない)
+					if 解析サイズX < cnt*解析密度:	解析サイズX=cnt*解析密度	//最も右下にある色ありピクセルを解析範囲の左上にする
+					if 解析サイズY < ocnt*解析密度:	解析サイズY=ocnt*解析密度
+				}
+			Loop
+		Loop
+	Loop
+	if 解析サイズX=0 & 解析サイズY=0{
+		dialog "There is no area!",1,""
+		解析開始中止=1
+	}
+	dim レイヤ滞在フレーム,12,解析フレーム数
+	dim 人押フレーム,4,解析フレーム数
+	
+	if 解析開始中止=0{
+		解析中=1
+		ボ状態(cnt)*=-1
+		buffer 4,解析サイズX,解析サイズY	//軌跡画像用バッファ
+		color 255,255,255
+		boxf 0,0,解析サイズX,解析サイズY
+		gsel 0
+		Repeat 現作製レイヤボタン
+			総滞在時間(1+cnt)=0.0
+			総移動距離(1+cnt)=0
+			総侵入回数(1+cnt)=0
+			総接触時間(1+cnt)=0.0
+			総接触回数(1+cnt)=0
+			接触時間トリガー(1+cnt)=0
+			接触回数トリガー(1+cnt)=0
+		Loop
+		Repeat 4
+			総人押時間(cnt) = 0.0
+			総人押回数(cnt) = 0
+		Loop
+		項目名1="":項目名2="":項目名3="":項目名4="":項目名5="":項目名6="":項目名7="":項目名8="":項目名9=""
+		結果1="":結果2="":結果3="":結果4="":結果5="":結果6="":結果7="":結果8="":結果9=""
+		文字列=""
+		
+		
+		ddim 滞在時間Bin,12,総Bin数+1
+		dim 移動距離Bin,12,総Bin数+1
+		dim 侵入回数Bin,12,総Bin数+1
+		dim 接触回数Bin,12,総Bin数+1
+		ddim 接触時間Bin,12,総Bin数+1
+		dim 前フレーム居たか,12
+		ddim フレーム毎移動量,解析フレーム数
+		dim 滞在位置X,解析フレーム数
+		dim 滞在位置Y,解析フレーム数
+		ddim 人押時間Bin,4,総Bin数+1
+		dim 人押回数Bin,4,総Bin数+1
+		
+		Message=0
+		マウスロスト=0
+		gosub *SaveParameters
+	}
+	
+	gsel 98
+	objenable 0,0	//途中で値を変えられないよう入力欄を不活性化
+	objenable 1,0
+	objenable 4,0
+	objenable 5,0
+	objenable 6,0
+	gsel 2
+	return
+
+*SaveRoi
+	CurrBuffer=0
+	Repeat 解析サイズY
+		今Y=cnt
+		Repeat 解析サイズX
+			今X=cnt
+			dim LayerExist,11
+			Repeat 現作製レイヤボタン
+				CurrBuffer=cnt+5
+				gsel CurrBuffer
+				pget 今X, 今Y
+				if ginfo(16)!=0 | ginfo(17)!=0 | ginfo(17)!=0{	//if ROI exist in this pixel
+					LayerExist(cnt)=1
+				}
+			Loop
+			値 = LayerExist(0)+LayerExist(1)*2+LayerExist(2)*4+LayerExist(3)*8+LayerExist(4)*16+LayerExist(5)*32+LayerExist(6)*64+LayerExist(7)*128+LayerExist(8)*256+LayerExist(9)*512+LayerExist(10)*1024
+			RoiSaveArray(今X, 今Y)=値
+		Loop
+	Loop
+
+	RoiSaveArray(0, 画面高さ)=解析サイズX
+	RoiSaveArray(1, 画面高さ)=解析サイズY
+	RoiSaveArray(2,画面高さ) = 現作製レイヤボタン
+	
+	dialog "",17,
+	if stat=1{	
+		SaveName=refstr
+		SaveName2=""
+		split SaveName, ".", SaveName2
+		bsave SaveName2+".roi",RoiSaveArray
+	}
+	gsel 0
+	return
+	
+*LoadRoi
+	dialog "roi",16,"*.roi"
+	if stat=1{
+		//gsel 選択レイヤ+4
+		bload refstr, RoiSaveArray	//Load
+
+		解析サイズX=RoiSaveArray(0, 画面高さ)
+		解析サイズY=RoiSaveArray(1, 画面高さ)
+		//dialog RoiSaveArray(2, 画面高さ),0
+		Repeat 11
+			if 現作製レイヤボタン < RoiSaveArray(2, 画面高さ){
+				gosub *AddChannel
+			}
+		Loop
+		
+		Repeat 解析サイズY
+			y=cnt
+			Repeat 解析サイズX
+				x=cnt
+				値=RoiSaveArray(x, y)
+				Repeat 11
+					LayerExist(cnt)=値\2
+					値/=2
+				Loop
+				
+				Repeat 現作製レイヤボタン
+					選択レイヤ=cnt+1
+					CurrBuffer=cnt+5
+					gsel CurrBuffer
+					if LayerExist(cnt)=1{
+						gosub *GetSelectedLayerColor	//現在の選択エリアの色を取得
+						color 選択レイヤ色赤,選択レイヤ色緑,選択レイヤ色青	//選択レイヤの色にエリアの色を変更
+						pset x,y
+						//dialog ""+x+" "+y,0
+					}
+				Loop
+			Loop
+		Loop
+		gsel 0
+	}
+	return
+	
+*exit
+	gosub *SaveParameters
+	end

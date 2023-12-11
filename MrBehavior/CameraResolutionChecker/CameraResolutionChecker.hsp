@@ -1,0 +1,104 @@
+#include "hspdsc.as"
+	
+	title "Select the camera and click Play. Then click Show resolution"
+	CameraSizeX=""
+	CameraSizeY=""
+	cls 4
+	color 255,255,255
+	boxf 0,0,2000,2000
+	dsc_Init				//初期化を必ずする！
+	
+	sdim name,1024
+	dsc_GetDeviceList name		//利用可能なデバイスの数を取得
+	if stat=0 : dialog "デバイスが見つかりません" : end
+
+	objsize 300,20
+	combox id,100,name
+	
+	objsize 150,20
+	color 0,0,0
+	pos 0,25
+	
+	mes "        V"
+	pos 0,50
+	button gosub "Play",*play
+	mes ""
+	mes "        V"
+	button gosub "Show resolution",*prop2
+	//mes "        or"
+	//button gosub "Show resolution 2",*prop3
+mes "        V"
+	button "Exit",*exit
+	
+	repeat
+		CameraSizeX=""+dsc_CapX
+		CameraSizeY=""+dsc_CapY
+		if CameraSizeX!=-1 & CameraSizeY!=-1{
+			//title "Camera resolution: x="+CameraSizeX+" y="+CameraSizeY
+			pos 0,70
+			mes "Camera resolution: x="+CameraSizeX+" y="+CameraSizeY
+		}
+		await 16
+	loop
+	stop
+
+*play
+	if playflag=0{				//プレイフラグ
+		dsc_SetActiveSel 0
+		dsc_Open id
+		if stat<0 : dialog "エラーが発生しました。",1,"DEVICE-ERROR" : stop
+		gsel 0,1
+		dsc_Play hwnd,160,120,320,240
+		//dsc_Play hwnd,160,120,640,360//640,360
+		if stat<0 : dialog "エラーが発生しました。",1,"CAPTURE-ERROR" : stop
+		playflag=1
+	}
+	return
+*_stop
+	if playflag=1{
+		dsc_Stop
+		dsc_Close
+		playflag=0
+	}
+	stop
+*prop
+	//再生中でないと失敗します。
+	dsc_FilterProp  hwnd , "Device Filter"
+	return
+*prop2
+	//dsc_playを使う前でないとうまく実行できない為、再生中の場合は一度リセットする。
+	if playflag=1{
+		dsc_Close				//一度停止する
+		dsc_Open id			//再度オープン
+		gsel 0,1
+		dsc_DevPinProp hwnd		//プロパティを表示
+		dsc_Play hwnd,160,120,320,240	//再び再生
+	}
+	return
+*capture
+	if playflag=1{
+		screen 1,320,240
+		dsc_GetImage hdc,0,0,320,240
+		redraw 1					//これは必ず必要です。
+		gsel 0,1
+	}
+	return
+
+*savebmp
+	if playflag=1{
+		dsc_SaveBMP "test.bmp"
+		wait 5						//ちょっと待たせたほうがいいかも
+		screen 1,32,32
+		picload "test.bmp"
+		gsel 0,1
+	}
+	//gsel 1,0
+	return
+*exit
+	if playflag=1:dsc_Close
+	end
+
+*prop3
+	//サイズとFourCCを取得します
+	dialog "サイズ:"+dsc_CapX+"x"+dsc_CapY+"\nFourCC:"+dsc_FourCC+"\n"+(dsc_AvgFrame/1000)
+	return

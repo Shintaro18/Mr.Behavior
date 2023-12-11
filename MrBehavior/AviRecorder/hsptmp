@@ -1,0 +1,408 @@
+//==================初期値==============================
+カメラ解像度X=640
+カメラ解像度Y=480
+動画サイズX=320
+動画サイズY=240
+解析時間=300
+撮影FPS=10.0
+名前=""
+Path=""
+//=======================================================
+//本ソフトの仕様に当たって以下の点に注意してください=====
+//カメラの解像度はCameraResolutionCheckerで調べる
+//月を跨ぐと録画がストップするはずのため跨いではいけない
+//4camまでサポート,4つは同じ解像度である必要あり,圧縮はMpeg-4が良い
+//Windowsの時計補正機能を切らないと時間が進んだ場合、連続シャッターが切られフリーズの偽陽性になってしまうため注意!
+//録画が間に合わない場合が録画解像度を下げる(640x480以下)
+//開発者メモ=============================================
+//Surface pro 3 camera res: 2592x1944(but actually works at 640x480), 1920x1080, 30fps 
+
+#include "hspdsc.as"	//USBカメラキャプチャ用のプラグイン
+#include "hspcv.as"		//イメージ操作用のプラグイン
+#include "hspext.as"
+
+screen 0,840,150,0,100,20
+title "AviRecorder"
+mes "Enter camera resolution"
+
+exist "CamResolutionX.ar"
+if strsize!=-1{
+	bload "CamResolutionX.ar",カメラ解像度X
+}
+exist "CamResolutionY.ar"
+if strsize!=-1{
+	bload "CamResolutionY.ar",カメラ解像度Y
+}
+
+pos 10,25: mes "x:"
+pos 30,25:	input カメラ解像度X
+pos 10,50: mes "y:"
+pos 30,50:	input カメラ解像度Y
+pos 10,75:	button "Next",*NextPhase
+pos 0,105:	mes "* Use CameraResolutionChecker for the check of the camera resolution."
+pos 0,120:	mes "* Xvid is required for the compressed video. Download it from https://www.xvid.com/ if you don't have it."
+stop
+
+*NextPhase
+bsave "CamResolutionX.ar",カメラ解像度X
+bsave "CamResolutionY.ar",カメラ解像度Y
+
+exist "VideoSizeX.ar"
+if strsize!=-1{
+	bload "VideoSizeX.ar",動画サイズX
+}
+exist "VideoSizeY.ar"
+if strsize!=-1{
+	bload "VideoSizeY.ar",動画サイズY
+}
+
+exist "Name.ar"
+if strsize!=-1{
+	bload "Name.ar",名前
+}
+exist "RecordFPS.ar"
+if strsize!=-1{
+	bload "RecordFPS.ar",撮影FPS
+}
+exist "RecordDur.ar"
+if strsize!=-1{
+	bload "RecordDur.ar",解析時間
+}
+exist "Path.ar"
+if strsize!=-1{
+	bload "Path.ar",Path
+}
+
+画面幅=1366		//パネルを表示するウィンドウのXサイズ
+画面高=768
+
+カメラ数=0	//認識したカメラの数
+dim 窓左上位置X,11
+dim 窓左上位置Y,11
+
+
+操作窓幅=840
+操作窓高さ=113
+窓左上位置X(0)=80
+窓左上位置Y(0)=5
+窓左上位置X(10)=80
+窓左上位置Y(10)=155
+screen 0,操作窓幅,操作窓高さ,0,窓左上位置X(0),窓左上位置Y(0)
+buffer 2,100,100
+buffer 3,100,100
+buffer 4,100,100
+buffer 5,100,100
+buffer 6,カメラ解像度X,カメラ解像度Y,0,窓左上位置X(0),窓左上位置Y(0)
+title "6"
+buffer 7,カメラ解像度X,カメラ解像度Y,0,窓左上位置X(0),500
+title "7"
+buffer 8,カメラ解像度X,カメラ解像度Y,0,窓左上位置X(0),窓左上位置Y(0)
+title "8"
+buffer 9,カメラ解像度X,カメラ解像度Y,0,窓左上位置X(0),500
+title "9"
+screen 10,動画サイズX*2,動画サイズY,0,窓左上位置X(10),窓左上位置Y(10)	//集合画面
+buffer 11, 2000,4096,0//,500,10	//offset調整用
+
+NextShatterTime=0.0	//次にシャッターを切る時間
+ShatterWaitTime=0.0	//シャッター間の時間
+ElapsedTime=0.0	//ソフトを起動してからの経過時間
+ElapsedTimePerFrame=0.0
+VideoLength=0.0	//動画の長さ(sec)
+StartElapsedTime = 0.0	//録画開始時の経過時刻を保持する
+
+連続撮影フレーム数=0
+
+Path="No path"	//この変数で示されたパスに解析結果や動画が保存される
+exist "Path"
+if strsize!=-1{
+	bload "Path",Path	//ロード
+}
+
+//カメラスタート処理
+dsc_Init					//初期化を必ずする！
+sdim CamName,1024
+dsc_GetDeviceList CamName		//USBカメラリストをこの変数に保持する
+if CamName=""{
+	dialog "Device is not found"
+	end
+}
+カメラ数=stat
+//
+
+gosub *窓サイズ更新
+screen 10,まとめ動画サイズX,まとめ動画サイズY,0,窓左上位置X(10),窓左上位置Y(10)	//集合画面
+gosub *動画取得開始
+
+gsel 0
+入力UiX=180
+ボタンY=2
+pos 0,-100:	input 避難
+objsize 50,25
+pos 入力UiX,ボタンY:	input 動画サイズX:	ボタンY+=25
+pos 入力UiX,ボタンY:	input 動画サイズY:	ボタンY+=28
+objsize 220,25
+pos 5,ボタンY:	button gosub "Apply",*動画取得条件更新:ボタンY+=75
+color 150,150,150
+line 235,0,235,82
+objsize 190,25
+入力UiX=450:ボタンY=2
+pos 入力UiX,ボタンY:	input 名前:	ボタンY+=25
+pos 入力UiX,ボタンY:	input 撮影FPS:	ボタンY+=25
+pos 入力UiX,ボタンY:	input 解析時間:	ボタンY+=25
+
+color 150,150,150
+line 645,0,645,82
+objsize 100,25
+入力UiX=650:ボタンY=2
+pos 入力UiX,ボタンY:	button gosub "REC Start",*録画開始:ボタンY+=25
+pos 入力UiX,ボタンY:	button gosub "REC Stop",*録画終了:ボタンY+=25
+objsize 80,25
+入力UiX=2:ボタンY=85
+pos 入力UiX,ボタンY:	button gosub "Select folder",*保存場所選択:ボタンY+=25
+color 0,0,0
+入力UiX=2
+ボタンY=2
+pos 入力UiX,ボタンY:	mes "Output X size (pixel):":	ボタンY+=25
+pos 入力UiX,ボタンY:	mes "Output Y size (pixel):":	ボタンY=2
+入力UiX=250
+pos 入力UiX,ボタンY:	mes "File name:":	ボタンY+=25
+pos 入力UiX,ボタンY:	mes "Frame/sec of out movie:":	ボタンY+=25
+pos 入力UiX,ボタンY:	mes "Capture duration(sec):":	ボタンY+=25
+
+onexit *Exit
+録画初フレーム=1	//録画の一番最初のフレームのみ1
+録画最初待ちCnt=0
+録画Phase=0
+color 150,150,150
+line 0,82,操作窓幅,82
+gosub *パス表示
+
+PreTime=0.0
+CurrTime=0.0
+
+OffsetInit=0
+REPEAT
+	年=gettime(0):月=gettime(1):日=gettime(3):時=gettime(4):分=gettime(5):秒=gettime(6)
+	mx=ginfo(0)-ginfo(4)-3
+	my=ginfo(1)-ginfo(5)-25
+	stick st
+	if st=128{
+		dsc_SetActiveSel 0
+		dsc_Stop	//新規追加
+		dsc_Close
+		break
+	}
+	
+	Repeat カメラ数		//DSCからカメラの映像をHSPへ移行
+		gsel (6+cnt)
+		pos 0,0
+		dsc_SetActiveSel cnt
+		//dsc_GetImage hdc,0,-カメラ解像度Y/4,カメラ解像度X,カメラ解像度Y	//USBカメラから画像の取得 Xｵﾌｾｯﾄ,Yオフセット,幅,高さ
+		dsc_GetImage hdc,0,0,カメラ解像度X,カメラ解像度Y	//USBカメラから画像の取得 Xｵﾌｾｯﾄ,Yオフセット,幅,高さ
+		
+		if OffsetInit=0{
+			OffsetInit=1
+			gsel 11
+			pos 0,0
+			gcopy (6+cnt),0,0,2000,4096
+			Repeat 4096
+				pget 0,cnt
+				if ginfo(16)!=255 | ginfo(17)!=255 | ginfo(18)!=255{
+					OffsetY=cnt
+					title ""+OffsetY
+					break
+				}
+				
+			Loop
+		}
+		
+		redraw 1
+		redraw 0
+	Loop
+	gsel 10
+	
+	Repeat カメラ数	//映像を縮小し、複数のカメラ映像を１つにまとめる
+		if cnt=0:pos 0,0
+		if cnt=1:pos 動画サイズX,0
+		if cnt=2:pos 0,動画サイズY
+		if cnt=3:pos 動画サイズX,動画サイズY
+		gzoom 動画サイズX,動画サイズY,(6+cnt),0,OffsetY,カメラ解像度X,カメラ解像度Y,0	//縮小動画を作成し、タイル状に並べる
+	Loop
+	
+	if 録画中=1{
+		if 録画Phase=1{
+			録画最初待ちCnt++
+			if 録画最初待ちCnt>=10{
+				録画Phase=2
+				NextShatterTime = ElapsedTime
+				StartElapsedTime = ElapsedTime
+			}
+		}
+		VideoLength=ElapsedTime-StartElapsedTime
+		if 録画Phase=2{
+			if NextShatterTime <= ElapsedTime{
+				gsel 10
+				cvputimg 0
+				cvputavi
+				ShatterWaitTime = 1000.0/double(撮影FPS)	//FPSから次の撮影までの待ち時間を計算
+				NextShatterTime += ShatterWaitTime
+				//連続撮影フレーム数++
+				//VideoLength += ElapsedTimePerFrame	//録画時間を計算
+				//if 連続撮影フレーム数=2:stop
+				//if 連続撮影フレーム数 >= 解析時間*撮影FPS{
+
+				//title ""+VideoLength+" "+解析時間*1000
+				if VideoLength >= 解析時間*1000{
+					gosub *録画終了
+				}
+				if 録画中=1{
+					連続撮影フレーム数++
+				}
+			}
+			color 255,0,0
+			circle 10,10,25,25	//録画マーク描画
+			pos 30,10
+			mes "REC"	//Show REC label
+			
+			redraw 1
+			redraw 0
+		}
+	}
+	//1frameに掛かった時間とプログラムを起動してから掛かった時間を計算
+
+	
+	CurrTime = gettime(6)*1000 + gettime(7)
+	ElapsedTimePerFrame = 0.0
+	if(CurrTime >= PreTime){	//繰り上がっていなかったら
+		ElapsedTimePerFrame = CurrTime - PreTime	//前のframeから今のframeまでに掛かった時間を算出
+	}
+	if(CurrTime < PreTime){	//繰り上がっていたら
+		ElapsedTimePerFrame = 60000-PreTime + CurrTime	//前のframeから今のframeまでに掛かった時間を算出
+	}
+	if ElapsedTimePerFrame > 2000.0{	//もしWindowsの時計が少し戻って異常な繰り上がり処理が起きてしまったら(1frame = 5secというあり得ない数値が出たら)
+		ElapsedTimePerFrame =0.0
+	}
+	ElapsedTime += ElapsedTimePerFrame	//録画を開始してから掛かった時間(ms)を更新
+	
+	
+		//title ""+カメラ数+" "+ElapsedTimePerFrame+" n"+NextShatterTime+" e"+ElapsedTime+" "+CurrTime
+	title ""+連続撮影フレーム数+" frames  "+(VideoLength/1000.0)+" sec"
+		//title ""+gettime(6)
+	PreTime=CurrTime
+	gsel 0
+	//color 255,255,255
+	//boxf 90,88,800,113
+	
+	//title " x"+mx+" y"+my
+	//title " "+連続撮影フレーム数
+	title "CamNum:"+カメラ数
+	gsel 10
+	redraw 1
+	redraw 0
+	
+	await 1
+LOOP
+stop
+
+*窓サイズ更新
+	if カメラ数=1{
+		まとめ動画サイズX=動画サイズX
+		まとめ動画サイズY=動画サイズY
+	}
+	if カメラ数=2{
+		まとめ動画サイズX=動画サイズX*2
+		まとめ動画サイズY=動画サイズY
+	}
+	if カメラ数>=3{
+		まとめ動画サイズX=動画サイズX*2
+		まとめ動画サイズY=動画サイズY*2
+	}
+	buffer 6,カメラ解像度X,カメラ解像度Y,0
+	buffer 7,カメラ解像度X,カメラ解像度Y,0
+	buffer 8,カメラ解像度X,カメラ解像度Y,0
+	buffer 9,カメラ解像度X,カメラ解像度Y,0
+	screen 10,まとめ動画サイズX,まとめ動画サイズY,0,窓左上位置X(10),窓左上位置Y(10)
+	cvbuffer 0,まとめ動画サイズX,まとめ動画サイズY
+	OffsetInit=0
+	return
+
+*動画取得開始
+	REPEAT カメラ数
+		dsc_SetActiveSel cnt
+		dsc_Open cnt,0,0,0
+		gsel (cnt+2)
+		dsc_Play hwnd,0,0,0,0	//この処理ではHSP窓上にOS上で表示するだけでHSP内にデータが取り込まれない、取り込むにはdsc_GetImageを使う
+		//dsc_Play2
+	LOOP
+	cvbuffer 0,まとめ動画サイズX,まとめ動画サイズY
+	return
+	
+*動画取得停止	//ワークしない
+	REPEAT カメラ数
+		dsc_SetActiveSel cnt
+		dsc_Stop
+		dsc_Close
+	LOOP
+	return
+	
+*動画取得条件更新
+	//gosub *動画取得停止
+	//gosub *動画取得開始
+	gosub *窓サイズ更新
+	bsave "VideoSizeX.ar",動画サイズX
+	bsave "VideoSizeY.ar",動画サイズY
+	return
+	
+*保存場所選択
+	selfolder  Path,"" //
+	bsave "Path",Path
+	CurrentActiveWindowID=ginfo(2)
+	gosub *パス表示
+	gsel CurrentActiveWindowID
+	gosub *パラメータ保存
+	return
+	
+*パス表示
+	gsel 0
+	color 255,255,255
+	boxf 0,88,操作窓幅,操作窓高さ
+	color 0,0,0
+	pos 90,88
+	mes Path
+	return
+	
+*録画開始
+	if Path="No path"{
+		dialog "Input destination path!",1
+		end
+		return
+	}
+	//cvmakeavi Path+"\\"+名前+" "+年+"_"+月+"_"+日+" "+時+"_"+分+"_"+秒+".avi",0x4356534D,撮影FPS,0	//path, codec, fps, CV buffer ID
+	//cvmakeavi Path+"\\"+名前+" "+年+"_"+月+"_"+日+" "+時+"_"+分+"_"+秒+".avi",-1,撮影FPS,0	//path, codec, fps, CV buffer ID
+	cvmakeavi Path+"\\"+名前+" "+年+"_"+月+"_"+日+" "+時+"_"+分+"_"+秒+".avi",$44495658,撮影FPS,0	//path, codec("xvid"), fps, CV buffer ID
+	録画初フレーム=1
+	gsel 10,1
+	連続撮影フレーム数=0
+	録画中=1
+	録画Phase=1
+	録画最初待ちCnt=0
+	gosub *パラメータ保存
+	return
+	
+*パラメータ保存
+	bsave "VideoSizeX.ar",動画サイズX
+	bsave "VideoSizeY.ar",動画サイズY
+	bsave "Name.ar",名前
+	bsave "RecordFPS.ar",撮影FPS
+	bsave "RecordDur.ar",解析時間
+	bsave "Path.ar",Path
+	return
+	
+*録画終了
+	cvendavi
+	録画中=0
+	return
+	
+*Exit
+	gosub *動画取得停止
+	end

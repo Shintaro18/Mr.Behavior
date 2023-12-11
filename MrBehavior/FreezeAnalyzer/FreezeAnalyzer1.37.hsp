@@ -1,0 +1,675 @@
+//改善点: !!!特定の1mFPSが異常に上がる不具合あり、title,マウスポイントで輝度を分かるように、なぜ二値化画像がカラフル？、フリーズシンボル出す
+//要チェック最初と最後のフレームはちゃんとしているか、min freeze frame numとframe num/binは間引かれ後のフレーム数、タイトルにピクセル輝度を表示する
+
+
+//  5 解析中にウィンドウを非アクティブにすると速く処理される
+//備考
+//強制水泳はpixel間隔4,15frame毎に解析した
+//最大4分間の動画しか解析できない（涙（cvgetaviでは548*15=8220フレームまでしか開けない,11分は1320フレーム,2frame/secなら68.5分解析できる）→最初から間引いた動画を使う事で解決
+#packopt name "FreezeAnalyzer"	//実行ファイル出力時のファイル名指定
+#define 自動解析スタート 1	//これを１にするとマウスを入れた直後から解析スタート
+#include "hspcv.as"		//画像・動画の操作用ライブラリ
+#include "hspext.as"	//フォルダ選択用のライブラリ
+#include "user32.as"	//トグルスイッチ用ライブラリ
+#include "hgimg3.as"	//平方根用
+#define HABA 405
+#define TAKASA 595
+言語=1
+画面左上X=100
+画面左上Y=25
+バッチ選択画面幅=1200
+バッチ選択画面高=1000
+onexit *Exit
+現フレーム=0
+現解析フレーム数=0	//解析したフレームの数
+無動フレーム数=0	//無動だったフレーム数
+単選択ファイル名=""	//一動画解析の場合の選択した動画名
+多動画解析モード=0
+動画パス=""
+
+FolderPath=""
+ExpMozi=""					//エクスポート用（テキスト内容）	
+tyokkei=15					//水槽の直径(cm)	今のところ不使用
+KaisekiFrame=600			//解析フレーム数(720)
+Result=""					//export用
+
+speedmode=0					//awaitを入れるか否か
+AviSizeX=320					//動画窓のサイズ
+AviSizeY=240
+シフト=0
+KaisekiFrameFromStart=0	//再生ではなく解析を開始してから処理したフレーム数
+hidariue_x=84				//解析範囲保持
+hidariue_y=38
+migisita_x=257
+migisita_y=191
+
+dim atari,HABA,TAKASA	//その座標にシグナルがあるか
+xAtariNum=0		//atariのx軸方向の数
+yAtariNum=0		//atariのy軸方向の数
+step=2			//ピクセル判定の細かさ(tailsuspention:2)
+AtariHenka=0	//前ﾌﾚｰﾑで当たりが無い場所に当たりが出現した数
+iro=0			//取得した色
+
+VideoDur=300
+VideoFPS=30
+BinDur=60
+MinFreezeDur=2
+AnalyzeFPS=15
+
+FrameStep=15		//画像を何ﾌﾚｰﾑ毎に解析するか(15で0.5秒毎)
+Threshold=45	//2値化する時の閾値
+動閾値=50		//動いたとみなすピクセル数
+最小無動フレーム数=4	//この数以下の無動行動は無動と見なさない
+BinFrameNum=120	//Bin当たりのフレーム数
+NextTrg=0		//次のフェーズへ移るトリガー
+TenmetuTrg=1
+TenmetuCnt=0
+連続無動数=0
+StartTrg=0
+ポイント輝度=0	//マウスでポイントしているピクセルの輝度
+ddim 無動割合,8220	//各binの無動率
+dim 無動判定,8220	//各フレームで無動であったかの最終判定 1なら無動
+
+sdim 結果_名前,10,999
+sdim 結果_変化量,10,999
+sdim 結果_すくみ率,10,999
+
+現結果ID=0
+
+未解析=1
+
+ProgramPath=dir_cur	//実行プログラムのパスを保持
+
+select_hani=-1	//選択している枠の番号
+select_ten=-1	//選択している点（左上0　右下１）
+
+mx=0:my=0
+pmx=0:pmy=0
+
+exist "VideoDur.fa"
+if strsize!=-1{
+	bload "VideoDur.fa",VideoDur	//ロード
+}
+exist "VideoFPS.fa"
+if strsize!=-1{
+	bload "VideoFPS.fa",VideoFPS	//ロード
+}
+exist "BinDur.fa"
+if strsize!=-1{
+	bload "BinDur.fa",BinDur	//ロード
+}
+exist "MinFreezeDur.fa"
+if strsize!=-1{
+	bload "MinFreezeDur.fa",最小無動フレーム数	//ロード
+}
+exist "ColorThreshold.fa"
+if strsize!=-1{
+	bload "ColorThreshold.fa",Threshold	//ロード
+}
+exist "MotionThreshold.fa"
+if strsize!=-1{
+	bload "MotionThreshold.fa",動閾値	//ロード
+}
+exist "AnalyzeFPS.fa"
+if strsize!=-1{
+	bload "AnalyzeFPS.fa",AnalyzeFPS	//ロード
+}
+exist "AnalysisDensity.fa"
+if strsize!=-1{
+	bload "AnalysisDensity.fa",step	//ロード
+}
+exist "Wait.fa"
+if strsize!=-1{
+	bload "Wait.fa",SaiseiSpeed	//ロード
+}
+
+exist "ULX.fa"
+if strsize!=-1{
+	bload "ULX.fa",hidariue_x	//ロード
+}
+exist "ULY.fa"
+if strsize!=-1{
+	bload "ULY.fa",hidariue_y	//ロード
+}
+exist "BRX.fa"
+if strsize!=-1{
+	bload "BRX.fa",migisita_x	//ロード
+}
+exist "BRY.fa"
+if strsize!=-1{
+	bload "BRY.fa",migisita_y	//ロード
+}
+//____________________________________________________________________________________________________________解析する範囲を指定させる処理
+
+
+screen 0,AviSizeX,AviSizeY,0,100,25			//動画ウィンドウ
+screen 1,HABA,TAKASA,0,AviSizeX+520,20			//操作ウィンドウ	120
+title "Freeze analyzer"
+buffer 2,AviSizeX,AviSizeY,0	//動画の最初のフレーム保持用
+buffer 3,HABA,TAKASA,0	//操作画面クリア用
+color 0,0,0
+boxf 0,0,HABA,TAKASA	//黒で塗り潰す
+
+
+Repeat	//メインループ
+	gosub *PutInputField
+	Repeat	//解析条件設定ループ
+		gsel 0
+		stick st,256
+		select_hani=-1
+		if st=256 & mx>hidariue_x-4 & my>hidariue_y-4 & mx<hidariue_x+4 & my<hidariue_y+4{
+			select_hani=1
+			select_ten=0
+		}
+		if st=256 & mx>migisita_x-4 & my>migisita_y-4 & mx<migisita_x+4 & my<migisita_y+4{
+			select_hani=1
+			select_ten=1
+		}
+		pmx=mx
+		pmy=my
+		mx=ginfo(0)-ginfo(4)-3			//マウスの位置取得
+		my=ginfo(1)-ginfo(5)-24
+		pget mx,my
+		ポイント輝度=ginfo(16)	//+ginfo(17)+ginfo(18)
+		
+		if select_hani=1{
+			if select_ten=0{
+				hidariue_x += mx-pmx
+				hidariue_y += my-pmy
+			}
+			if select_ten=1{
+				migisita_x += mx-pmx
+				migisita_y += my-pmy
+			}
+		}
+		pos 0,0:color 0,0,0
+		gcopy 2,0,0,AviSizeX,AviSizeY
+		pos hidariue_x,hidariue_y-22
+		if 言語=0:mes "解析範囲"
+		if 言語=1:mes "ROI"
+		line migisita_x,hidariue_y, hidariue_x,hidariue_y
+		line migisita_x,migisita_y
+		line hidariue_x,migisita_y
+		line hidariue_x,hidariue_y
+		boxf hidariue_x-4,hidariue_y-4, hidariue_x+4,hidariue_y+4
+		boxf migisita_x-4,migisita_y-4, migisita_x+4,migisita_y+4
+		//title "("+hidariue_x+","+hidariue_y+") ("+migisita_x+","+migisita_y+")"
+		title "Intensity: "+ポイント輝度
+	
+	
+		//操作画面の処理
+		gsel 1
+		pos 0,0
+		gcopy 3,0,0,HABA,TAKASA
+		color 255,255,255
+		シフト=45
+		pos 10,シフト
+
+		if 言語=1: mes "Video duration(sec)"
+		シフト+=55:pos 10,シフト
+		if 言語=1: mes "VideoFPS"
+		シフト+=55:pos 10,シフト
+		if 言語=1: mes "Bin duration(sec)"
+		シフト+=55:pos 10,シフト
+		if 言語=1: mes "Min freeze dur (sec)"
+		シフト+=55:pos 10,シフト
+		if 言語=1: mes "Color threshold(0-255)"
+		シフト+=55:pos 10,シフト
+		if 言語=1: mes "Motion threshold (pixel)"
+		シフト+=55:pos 10,シフト
+		if 言語=1: mes "Analyze FPS"
+		シフト+=55:pos 10,シフト
+		if 言語=1: mes "Analyze pixel density"
+		シフト+=55:pos 10,シフト
+		if 言語=1: mes "Wait(ms)"
+		TenmetuCnt++
+		if TenmetuCnt>40{	//点滅処理
+			TenmetuTrg*=-1
+			TenmetuCnt=0
+		}
+		gsel 0
+		redraw 1
+		redraw 0
+		gsel 1
+		redraw 1
+		redraw 0
+		await 16
+		stick st
+		if st=32 | StartTrg=1{	//もしスタートボタンが押されたら
+			StartTrg=0
+			break
+		}
+	Loop
+	
+	xAtariNum=(migisita_x-hidariue_x)/step
+	yAtariNum=(migisita_y-hidariue_y)/step
+	//dialog ""+xAtariNum,0
+	//dialog ""+yAtariNum,0
+	
+	//=======================================解析ループ================================================
+	pos 0,0
+	repeat 解析動画数//ビデオ毎ループ
+		KaisekiFrame = VideoDur*VideoFPS
+		最小無動フレーム数 = MinFreezeDur*AnalyzeFPS
+		BinFrameNum = BinDur*AnalyzeFPS
+		FrameStep = int(VideoFPS/AnalyzeFPS)
+		//ビデオ毎初期化
+		cvcloseavi	//aviファイルを閉じる
+		cvbuffer 0,1,1	//CVバッファ初期化(p1：バッファー番号、p2,3：バッファーサイズ)
+		if 多動画解析モード=1{
+			動画パス=FolderPath+"\\"+filename2(cnt)
+		}
+		cvopenavi 動画パス,0	//aviファイルをバッファー(p2)に開く（後で閉じる必要あり）
+
+		現フレーム=0
+		現解析フレーム数=0
+		KaisekiFrameFromStart=0
+		無動フレーム数=0
+		連続無動数=0
+		ddim 無動割合,8220	//各binの無動率
+		dim 無動判定,8220	//各フレームで無動であったかの最終判定 1なら無動
+		dim atari,HABA,TAKASA	//その座標にシグナルがあるか
+		dim AtariHenkaHozi,KaisekiFrame/FrameStep		//当たり変化数を保持
+		
+		repeat 	//フレーム毎ループ
+			stick st
+			if st=128{
+				end
+			}
+			cvgetavi			//CVバッファに動画のﾌﾚｰﾑ画像を保存
+			現フレーム++
+			if cnt\FrameStep=0{
+				現解析フレーム数++
+				cvflip 0,0
+				cvthreshold CV_THRESH_BINARY,Threshold,255,0	//p1 : ２値化タイプ  p2 : 閾値(実数)(50)  p3 : 二値化後の画素値(実数)  p4 : CVバッファID
+				gsel 0
+				cvgetimg 0			//CVバッファーからHSPウィンドウへ画像転送
+				
+				AtariHenka=0	//あたり変化数初期化
+				repeat yAtariNum
+					ocnt=cnt
+					repeat xAtariNum
+						pget hidariue_x+cnt*step,hidariue_y+ocnt*step
+						iro=ginfo(16)
+						if iro=0{	//もしその点が黒い場合
+							if atari(cnt,ocnt)=1{	//前ﾌﾚｰﾑも黒い場合
+								color 0,255,0
+							}
+							if atari(cnt,ocnt)=0{	//前ﾌﾚｰﾑは黒くない場合
+								color 255,0,0
+								atari(cnt,ocnt)=1
+								AtariHenka++	//変化量増加
+							}
+							pset hidariue_x+cnt*step,hidariue_y+ocnt*step	//プロット
+						}
+						if iro=255{	//もしその点が黒くない場合
+							if atari(cnt,ocnt)=1{	//前ﾌﾚｰﾑが黒い場合
+								color 0,0,220
+								atari(cnt,ocnt)=0
+								AtariHenka++	//変化量増加
+								pset hidariue_x+cnt*step,hidariue_y+ocnt*step	//プロット
+							}
+						}
+					loop
+				loop
+		
+				AtariHenkaHozi(KaisekiFrameFromStart)=AtariHenka	//変化量を保存
+				if AtariHenka <= 動閾値{	//変化ピクセル数閾値以下
+					連続無動数++
+				}
+				if AtariHenka > 動閾値{	//変化ピクセル数閾値より大きかった場合
+					連続無動数=0
+				}
+				if 連続無動数 = 最小無動フレーム数{
+					無動フレーム数 += 最小無動フレーム数
+				}
+				if 連続無動数 > 最小無動フレーム数{
+					無動フレーム数++
+				}
+				
+				KaisekiFrameFromStart++
+				if KaisekiFrameFromStart >= KaisekiFrame/FrameStep{
+					break
+				}
+				if 言語=0: title "Freeze analyzer 再生フレーム数 "+現フレーム
+				if 言語=1: title "Freeze analyzer Current frame: "+現フレーム
+
+				gsel 1
+				pos 0,0
+				gcopy 3,0,0,HABA,TAKASA
+				color 255,255,255
+				pos 10,10
+				if 言語=0: mes "変化量: "+AtariHenka
+				if 言語=1: mes "Changed area: "+AtariHenka
+				pos 10,35
+				if 言語=0: mes "無動フレーム数: "+無動フレーム数+"/"+現解析フレーム数
+				if 言語=1: mes "Freeze frame num: "+無動フレーム数+"/"+現解析フレーム数
+
+				gsel 0
+				redraw 1
+				redraw 0
+				gsel 1
+				redraw 1
+				redraw 0
+			
+				if SaiseiSpeed!=0{
+					await SaiseiSpeed/10
+				}
+				if SaiseiSpeed=0{
+					await 1
+				}
+			}
+		loop
+		cvcloseavi	//aviファイルを閉じる
+	
+
+		if 多動画解析モード = 0{
+			split 動画パス, "\\", 単選択ファイル名
+			結果_名前(現結果ID)=単選択ファイル名(stat-1)
+		}
+		if 多動画解析モード = 1{
+			結果_名前(現結果ID)=filename2(cnt)
+		}
+		//無動判定を出し、無動率を算出して記入
+		連続無動数=0
+		repeat KaisekiFrame/FrameStep
+			kcnt=cnt
+			if AtariHenkaHozi(cnt) <= 動閾値{	//変化ピクセル数閾値以下
+				連続無動数++
+			}
+			if AtariHenkaHozi(cnt) > 動閾値{	//変化ピクセル数閾値より大きかった場合
+				連続無動数=0
+			}
+			if 連続無動数 = 最小無動フレーム数{	//指定した連続無動数にたっしたら過去のフレームも遡って無動判定にする
+				repeat  最小無動フレーム数
+					無動判定(kcnt-cnt)=1	//徐々にさかのぼりながら無動判定を入れる
+				loop
+			}
+			if 連続無動数 > 最小無動フレーム数{
+				無動判定(cnt)=1
+			}
+		loop
+		
+		repeat KaisekiFrame/FrameStep
+			無動割合(cnt/BinFrameNum)+=double(無動判定(cnt))	//各Binに無動フレーム数を加える
+		loop
+		//無動率を計算して記入
+		repeat KaisekiFrame/FrameStep/BinFrameNum
+			無動割合(cnt)*=double(100)
+			無動割合(cnt)/=double(BinFrameNum)
+			結果_すくみ率(現結果ID)+=""+無動割合(cnt)+","
+		loop
+
+		repeat KaisekiFrame/FrameStep
+			結果_変化量(現結果ID)+=""+AtariHenkaHozi(cnt)+","
+		loop
+		現結果ID++
+	Loop
+Loop
+
+
+
+*PutInputField
+	gsel 1
+	シフト=10
+	pos 10,シフト	:button gosub "Open",*VideoOpen
+	pos 80,シフト	:button gosub "MultiOpen",*VideoMultiOpen
+	pos 150,シフト	:button gosub "Export",*Export
+	シフト+=55
+	pos 10,シフト	:input VideoDur	:シフト+=55
+	pos 10,シフト	:input VideoFPS	:シフト+=55
+	pos 10,シフト	:input BinDur	:シフト+=55
+	pos 10,シフト	:input MinFreezeDur	:シフト+=55
+	pos 10,シフト	:input Threshold	:シフト+=55
+	pos 10,シフト	:input 動閾値		:シフト+=55
+	pos 10,シフト	:input AnalyzeFPS	:シフト+=55
+	pos 10,シフト	:input step			:シフト+=55
+	pos 10,シフト	:input SaiseiSpeed	:シフト+=55
+	pos 10,シフト	:button gosub "Start",*Start	:シフト+=55
+	if 未解析=0{
+		objenable 3,0	//途中で値を変えられないよう入力欄を不活性化
+		objenable 7,0
+		objenable 9,0
+	}
+	gsel 0
+	return
+	
+*VideoWindowResize
+	cvgetinfo AviSizeX,,OVOBJ_INFO_SIZEX
+	cvgetinfo AviSizeY,,OVOBJ_INFO_SIZEY
+	screen 0,AviSizeX,AviSizeY,0,100,25			//動画ウィンドウ
+	
+	if hidariue_x > AviSizeX{	//ROIが動画より大きい場合
+		hidariue_x = AviSizeX-10
+		if hidariue_x < 5{
+			hidariue_x = 5
+		}
+	}
+	if hidariue_y > AviSizeY{
+		hidariue_y = AviSizeY-10
+		if hidariue_y < 5{
+			hidariue_y = 5
+		}
+	}
+	if migisita_x > AviSizeX{
+		migisita_x = AviSizeX-10
+		if migisita_x < 20{
+			migisita_x = 20
+		}
+	}
+	if migisita_y > AviSizeY{
+		migisita_y = AviSizeY-10
+		if migisita_y < 20{
+			migisita_y = 20
+		}
+	}
+	
+	return
+
+*VideoCueing
+	gsel 0
+	cls
+	cvcloseavi	//aviファイルを閉じる
+	cvbuffer 0,1,1	//CVバッファ初期化(p1：バッファー番号、p2,3：バッファーサイズ)
+	cvopenavi 動画パス,0	//aviファイルをバッファー(p2)に開く（後で閉じる必要あり）
+	cvgetavi	//AVI動画取得
+	gosub *VideoWindowResize
+	
+	cvflip 0,0	//画像上下逆転(なぜか上下がさかさまになる為)
+	cvgetimg 0	//画像転送
+	buffer 2,AviSizeX,AviSizeY,0	//動画の最初のフレーム保持用
+	gcopy 0,0,0,1200,600
+	gsel 0
+	return
+	
+*VideoOpen
+	gsel 0
+	dialog "avi", 16, "avi動画ファイル"
+	if stat != 0{
+		動画パス=refstr
+		解析動画数=1
+		多動画解析モード=0
+		gosub *VideoCueing
+	}
+	return
+	
+*VideoMultiOpen
+	selfolder  FolderPath,"" //
+	if stat=0{
+		多動画解析モード=1
+		screen 6,バッチ選択画面幅,バッチ選択画面高,0,画面左上X,画面左上Y	//ファイル選択ウィンドウ
+		title "Click movie files for the sequence analysis"
+		sdim filename,1000,99	//ファイル名保持用
+		sdim filename2,1000,99	//ファイル名保持用（解析順番）
+		sdim list,1024			//16384
+		dirlist list, FolderPath+"\\*.avi",1	//フォルダ内のファイル名を取得しlistへ代入
+		総ファイル数=stat				//↑ファイル数を代入
+		//dialog str(file_num),0,""
+		repeat 総ファイル数
+			filename2(cnt)=""
+		loop
+		index=0						//抜き出す最初の位置
+		repeat 総ファイル数
+			getstr filename(cnt),list,index,,	//listから改行で区切られた文字列を抜出す
+			index+=strsize			//抜き出した分indexを進める
+		loop
+		color 0,0,0
+		LUX=30		//ファイル名一覧(filename)団の左上座標
+		LUY=30
+		LUX2=620	//ファイル名一覧(filename2)団の左上座標
+		LUY2=30
+		repeat 総ファイル数	//ファイル名一覧を描画
+			pos LUX,20*cnt+LUY
+			mes cnt+1
+			pos LUX+20,20*cnt+LUY
+			mes filename(cnt)
+		
+			pos LUX2,20*cnt+LUY2
+			mes cnt+1
+			pos LUX2+20,20*cnt+LUY2
+			mes filename2(cnt)
+		loop
+		現動画ID=0	//現在の順番（filename2での要素数として使用）
+		解析動画数=0
+		repeat	//ファイル名選択時メインループ
+			repeat 総ファイル数
+				if filename(cnt)!=""{
+					mx=ginfo(0)-ginfo(4)-3				//マウスの位置取得
+					my=ginfo(1)-ginfo(5)-24
+					stick st,256
+					if st=256{
+						if mx>LUX & mx<LUX+300 & my>20*cnt+LUY & my<20*cnt+LUY+20{
+							filename2(現動画ID)=filename(cnt)	//名前をfilename2に受け渡す
+							現動画ID++
+							解析動画数++
+							filename(cnt)=""
+							color 255,255,255
+							boxf 0,0,バッチ選択画面幅,バッチ選択画面高
+							color 0,0,0
+							repeat 総ファイル数						//ファイル名一覧を再描画
+								pos LUX,20*cnt+LUY
+								mes cnt+1
+								pos LUX+20,20*cnt+LUY
+								mes filename(cnt)
+		
+								pos LUX2,20*cnt+LUY2
+								mes cnt+1
+								pos LUX2+20,20*cnt+LUY2
+								mes filename2(cnt)
+							loop
+						}
+					}
+				}
+			loop
+			
+			color 100,100,200
+			boxf 20,5,120,25
+			pos 60,7
+			color 0,0,0
+			mes "OK"
+			
+			color 100,100,200
+			boxf 125,5,225,25
+			pos 153,7
+			color 0,0,0
+			mes "Cancel"
+			if (st=256 & mx >=20 & my>=5 & mx<=120 & my<=25) | 総ファイル数=現動画ID{	//OKが押されたら
+				連続解析モード=1
+				連続解析数=0
+				sdim filename,50,99	//ファイル名保持用
+				//screen 6,1200,1000,2,5,5
+				screen 6,1200,1000,2,画面左上X,画面左上Y
+				
+				名前=filename2(0)
+				動画パス=FolderPath+"\\"+filename2(0)
+				gsel 2
+				cls
+				cvcloseavi
+
+				gosub *VideoCueing
+				
+				動画未開=0
+				break
+			}
+			if st=256 & mx >=125 & my>=5 & mx<=225 & my<=25{	//Cancelが押されたら
+				sdim filename,99	//ファイル名保持用
+				sdim filename2,99	//初期化
+				screen 6,1200,1000,2,5,5
+				break
+			}
+			redraw 1
+			redraw 0
+			await 16
+		loop
+	}
+	return
+	
+*Export
+	dialog "",17,
+	if stat=1{	
+		Result="%Freeze:\n"
+		
+		Result+="Bin"
+		repeat KaisekiFrame/FrameStep/BinFrameNum
+			Result+=","+(cnt+1)
+		loop
+		
+		Result+="\n"
+		
+		repeat 現結果ID
+			Result+=結果_名前(cnt)+","+結果_すくみ率(cnt)
+			Result+="\n"
+		loop
+		
+		Result+="\n\n"
+		
+		Result+="Magnitude of movement (pixel):\n"
+		Result+="Frame"
+		repeat KaisekiFrame/FrameStep
+			Result+=","+(cnt+1)
+		loop
+		
+		Result+="\n"
+		
+		repeat 現結果ID
+			Result+=結果_名前(cnt)+","+結果_変化量(cnt)
+			Result+="\n"
+		loop
+		
+		notesel Result
+		SavePath=refstr
+		SaveName=""
+		split SavePath, ".", SaveName
+		notesave SaveName+".csv"
+	}
+	return
+	
+*Start
+	StartTrg=1
+	未解析=0
+	gosub *Save
+	gsel 1
+	cls
+	gsel 0
+	return
+	
+*Save
+	chdir ProgramPath
+	bsave "VideoDur.fa",VideoDur
+	bsave "VideoFPS.fa",VideoFPS
+	bsave "BinDur.fa",BinDur
+	bsave "MinFreezeDur.fa",MinFreezeDur
+	bsave "ColorThreshold.fa",Threshold
+	bsave "MotionThreshold.fa",動閾値
+	bsave "AnalyzeFPS.fa",AnalyzeFPS
+	bsave "AnalysisDensity.fa",step
+	bsave "Wait.fa",SaiseiSpeed
+	bsave "ULX.fa",hidariue_x
+	bsave "ULY.fa",hidariue_y
+	bsave "BRX.fa",migisita_x
+	bsave "BRY.fa",migisita_y
+	return
+	
+*Exit
+	gosub *Save
+	end

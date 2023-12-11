@@ -1,0 +1,273 @@
+//Event1:　←key, Event2: ↓key, Event3: →key 
+//0.1秒単位で計測、Bin：1分
+#include "hspext.as"	//フォルダ選択用のライブラリ
+ScreenWidth=1280
+ScreenHeight=480
+PathUY=50
+LogUY=70
+dim UsedKey,8
+UsedKey(0)=1	//reft
+UsedKey(1)=8	//down
+UsedKey(2)=4	//right
+UsedKey(3)=2	//right
+UsedKey(4)=1024	//tab
+UsedKey(5)=64	//ctrl
+UsedKey(6)=32	//enter
+UsedKey(7)=128	//exit
+PreHundMsec=0
+CurrHundMsec=0
+ElapsedSec=0.000000001	//HSPの実数誤差対策
+RealElapsedSec=0.0
+NextBinTime=0.0
+dim now_sec,8	//1→100ミリ秒(現在)
+dim pre_sec,8	//1→100ミリ秒(1ターン前)
+ddim PushedDur,8	//1→100ミリ秒、合計時間
+ddim pre_PushedDur,8	//前に表示した値を保持（カウンター）
+ddim hyouzi_PushedDur,8	//表示値保持用（カウンター）
+dim Trg,8
+dim PreTrg,8
+dim TotalHitNum,8
+dim PreTotalHitNum,8
+Screen 0,ScreenWidth,ScreenHeight
+title "Bin timer (Mr. behavior)"
+BinResult=""
+OutputText=""
+notesel OutputText
+SerialNum=0
+FPS=0
+NextFPSCheck=1.0
+CurrFPS=0
+PlaySpd=1.0
+BinSec=60
+HundMsecElapsed=0
+Pause=-1
+StartTrg=0
+Name=""
+sdim FolderPath,1000
+
+exist "Name.bt"
+if strsize!=-1{
+	bload "Name.bt",Name
+}
+exist "PlaySpd.bt"
+if strsize!=-1{
+	bload "PlaySpd.bt",PlaySpd
+}
+exist "BinSec.bt"
+if strsize!=-1{
+	bload "BinSec.bt",BinSec
+}
+
+ShiftX=0
+ShiftY=25
+pos ShiftX,ShiftY
+mes "Name:"
+ShiftX+=45
+pos ShiftX,ShiftY
+input Name,150
+ShiftX+=175
+pos ShiftX,ShiftY
+mes "PlaySpd:"
+ShiftX+=70
+pos ShiftX,ShiftY
+input PlaySpd,55
+ShiftX+=75
+pos ShiftX,ShiftY
+mes "Bin(s):"
+ShiftX+=60
+pos ShiftX,ShiftY
+input BinSec,25
+
+objsize 100
+ShiftX+=65
+pos ShiftX,ShiftY
+button gosub "Folder",*Folder
+ShiftX+=105
+pos ShiftX,ShiftY
+button gosub "Start",*Start
+ShiftX+=105
+pos ShiftX,ShiftY
+button gosub "Pause/Resume",*PauseResume
+ShiftX+=105
+pos ShiftX,ShiftY
+button gosub "Reset",*Reset
+
+onexit goto *exit
+
+repeat	//main loop
+	stick st,1263	//15
+	
+	if Phase=0{	//最初の押しまでこのループで待機
+		if st=16{
+			gosub *Start
+		}
+	}
+	
+	CurrFPS++
+	ResultChange=0
+	HundMsecElapsed=0	//hundred mili sec
+	CurrHundMsec=gettime(7)/100
+	if PreHundMsec!=CurrHundMsec{
+		if Phase=1 and Pause=-1{
+			ElapsedSec+=0.1*PlaySpd
+			HundMsecElapsed=1
+		}
+		RealElapsedSec+=0.1
+		ResultChange=1
+		PreHundMsec=CurrHundMsec
+		if RealElapsedSec >= NextFPSCheck{
+			FPS=CurrFPS
+			CurrFPS=0
+			NextFPSCheck+=1.0
+		}
+	}
+	
+
+	repeat 8
+		//PreTrg(cnt)=Trg(cnt)
+		if st=UsedKey(cnt){	//押している場合
+			ResultChange=1
+			if Trg(cnt)=0{	//押し始めの場合
+				Trg(cnt)=1
+				if cnt=0:color 255,0,0
+				if cnt=1:color 0,255,0
+				if cnt=2:color 255,255,0
+				if cnt=3:color 0,0,255
+				if cnt=4:color 255,127,39
+				if cnt=5:color 128,64,64
+				if cnt=6:color 155,250,255
+				if cnt=7:color 251,81,255
+				boxf 3,3,903,20
+				color 0,0,0
+				if Phase=1 and Pause=-1{
+					TotalHitNum(cnt)++
+				}
+			}
+			if Phase=1{
+				if Pause=-1{
+					if HundMsecElapsed=1{
+						PushedDur(cnt)+=0.1*PlaySpd	//0.1秒増加
+					}
+				}
+			}
+		}
+		if st!=UsedKey(cnt) & Trg(Cnt)=1{	//押し終わった瞬間
+			Trg(Cnt)=0
+			color 255,255,255
+			boxf 3,3,903,20
+			color 0,0,0
+		}
+		if Phase=1{
+			if Pause=-1{
+				hyouzi_PushedDur(cnt)=PushedDur(cnt)
+			}
+		}
+	loop
+
+	if ResultChange=1{
+		if Pause=1: PauseText=" [Pause]"
+		if Pause=-1: PauseText=""
+		title ""+strf("%.2f",ElapsedSec)+"s    "+"[Left]"+strf("%.2f",hyouzi_PushedDur(0))+"s ("+TotalHitNum(0)+")"+" [Down]"+strf("%.2f",hyouzi_PushedDur(1))+"s ("+TotalHitNum(1)+")"+" [Right]"+strf("%.2f",hyouzi_PushedDur(2))+"s ("+TotalHitNum(2)+")"+" [Up]"+strf("%.2f",hyouzi_PushedDur(3))+"s ("+TotalHitNum(3)+")"    +" [Tab]"+strf("%.2f",hyouzi_PushedDur(4))+"s ("+TotalHitNum(4)+")"+" [Ctrl]"+strf("%.2f",hyouzi_PushedDur(5))+"s ("+TotalHitNum(5)+")"+" [Enter]"+strf("%.2f",hyouzi_PushedDur(6))+"s ("+TotalHitNum(6)+")"+" [Esc]"+strf("%.2f",hyouzi_PushedDur(7))+"s ("+TotalHitNum(7)+")  FPS:"+FPS+"  "+PauseText
+	}
+	
+	if Phase!=0 and Pause=-1{
+		if ElapsedSec >= NextBinTime{		//Bin時間が経過したらラップを記入
+			RerialNum++
+			Repeat 8
+				hyouzi_PushedDur(cnt)=PushedDur(cnt)-pre_PushedDur(cnt)	//1分間分を算出
+				HitNum(cnt)=TotalHitNum(cnt)-PreTotalHitNum(cnt)
+			loop
+			mes ""+RerialNum+" [Left]"+strf("%.2f",hyouzi_PushedDur(0))+"s "+HitNum(0)+"times"+"  [Down]"+strf("%.2f",hyouzi_PushedDur(1))+"s "+HitNum(1)+"times"+"  [Right]"+strf("%.2f",hyouzi_PushedDur(2))+"s "+HitNum(2)+"times"+"  [Up]"+strf("%.2f",hyouzi_PushedDur(3))+"s "+HitNum(3)+"times"    +"  [Tab]"+strf("%.2f",hyouzi_PushedDur(4))+"s "+HitNum(4)+"times"+"  [Ctrl]"+strf("%.2f",hyouzi_PushedDur(5))+"s "+HitNum(5)+"times"+"  [Enter]"+strf("%.2f",hyouzi_PushedDur(6))+"s "+HitNum(6)+"times"+"  [Esc]"+strf("%.2f",hyouzi_PushedDur(7))+"s "+HitNum(7)+"times"
+			BinResult+=""+RerialNum+"	"+strf("%.2f",hyouzi_PushedDur(0))+"	"+HitNum(0)+"	"+strf("%.2f",hyouzi_PushedDur(1))+"	"+HitNum(1)+"	"+strf("%.2f",hyouzi_PushedDur(2))+"	"+HitNum(2)+"	"+strf("%.2f",hyouzi_PushedDur(3))+"	"+HitNum(3)+"	"+strf("%.2f",hyouzi_PushedDur(4))+"	"+HitNum(4)+"	"+strf("%.2f",hyouzi_PushedDur(5))+"	"+HitNum(5)+"	"+strf("%.2f",hyouzi_PushedDur(6))+"	"+HitNum(6)+"	"+strf("%.2f",hyouzi_PushedDur(7))+"	"+HitNum(7)+"\n"
+			OutputText=BinResult  +  "\nTotal	"+strf("%.2f",PushedDur(0))+"	"+TotalHitNum(0)+"	"+strf("%.2f",PushedDur(1))+"	"+TotalHitNum(1)+"	"+strf("%.2f",PushedDur(2))+"	"+TotalHitNum(2)+"	"+strf("%.2f",PushedDur(3))+"	"+TotalHitNum(3)+"	"+strf("%.2f",PushedDur(4))+"	"+TotalHitNum(4)+"	"+strf("%.2f",PushedDur(5))+"	"+TotalHitNum(5)+"	"+strf("%.2f",PushedDur(6))+"	"+TotalHitNum(6)+"	"+strf("%.2f",PushedDur(7))+"	"+TotalHitNum(7)
+			//noteadd ""+RerialNum+"	"+strf("%.2f",hyouzi_PushedDur(0))+"	"+HitNum(0)+"	"+strf("%.2f",hyouzi_PushedDur(1))+"	"+HitNum(1)+"	"+strf("%.2f",hyouzi_PushedDur(2))+"	"+HitNum(2)+"	"+strf("%.2f",hyouzi_PushedDur(3))+"	"+HitNum(3)+"	"+strf("%.2f",hyouzi_PushedDur(4))+"	"+HitNum(4)+"	"+strf("%.2f",hyouzi_PushedDur(5))+"	"+HitNum(5)+"	"+strf("%.2f",hyouzi_PushedDur(6))+"	"+HitNum(6)+"	"+strf("%.2f",hyouzi_PushedDur(7))+"	"+HitNum(7)
+			if FolderPath!=""{
+				notesave FolderPath+"\\"+Name+"_"+StartHour+"_"+StartMin+"_"+StartSec+".txt"
+			}
+			if FolderPath=""{
+				notesave "Result\\"+Name+"_"+StartHour+"_"+StartMin+"_"+StartSec+".txt"
+			}
+			Repeat 8
+				pre_PushedDur(cnt)=PushedDur(cnt)
+				PreTotalHitNum(cnt)=TotalHitNum(cnt)
+			Loop
+			NextBinTime += double(BinSec)
+		}
+	}
+	
+	await 12
+	
+	
+loop
+
+*Folder
+	selfolder FolderPath,""
+	if stat=0{
+		color 255,255,255
+		boxf 0,50,ScreenWidth,LogUY
+		color 0,0,0
+		pos 0,PathUY
+		mes FolderPath
+		//dialog FolderPath,0
+	}
+	return
+	
+*Start
+	BinResult+="#	Left(s)	Left(#)	Down(s)	Down(#)	Right(s)	Right(#)	Up(s)	Up(#)	Tab(s)	Tab(#)	Ctrl(s)	Ctrl(#)	Enter(s)	Enter(#)	Esc(s)	Esc(#)\n"
+	StartHour=gettime(4)
+	StartMin=gettime(5)
+	StartSec=gettime(6)
+	ElapsedSec=0.000000001	//HSPの実数誤差対策
+	NextBinTime=0.0
+	NextBinTime+=double(BinSec)
+	RerialNum=0
+	pos 0,LogUY
+	Phase=1
+	Pause=-1
+	objenable 0,0	//途中で値を変えられないよう入力欄を不活性化
+	objenable 1,0
+	objenable 2,0
+	objenable 3,0
+	objenable 4,0
+	return
+	
+*PauseResume
+	Pause*=-1
+	return
+
+*Reset
+	Phase=0
+	Pause=-1
+	StartTrg=0
+	BinResult=""
+	OutputText=""
+	//PreHundMsec=0
+	//CurrFPS=0
+	ElapsedSec=0.0
+	//RealElapsedSec=0.0
+	NextBinTime=0.0
+	dim now_sec,8	//1→100ミリ秒(現在)
+	dim pre_sec,8	//1→100ミリ秒(1ターン前)
+	ddim PushedDur,8	//1→100ミリ秒、合計時間
+	ddim pre_PushedDur,8	//前に表示した値を保持（カウンター）
+	ddim hyouzi_PushedDur,8	//表示値保持用（カウンター）
+	dim Trg,8
+	dim PreTrg,8
+	dim TotalHitNum,8
+	dim PreTotalHitNum,8
+	objenable 0,1	//途中で値を変えられないよう入力欄を不活性化
+	objenable 1,1
+	objenable 2,1
+	objenable 3,1
+	objenable 4,1
+	color 255,255,255
+	boxf 0,LogUY,ScreenWidth,ScreenHeight
+	color 0,0,0
+	title ""+strf("%.2f",ElapsedSec)+"s    "+"[Left]"+strf("%.2f",hyouzi_PushedDur(0))+"s ("+TotalHitNum(0)+")"+" [Down]"+strf("%.2f",hyouzi_PushedDur(1))+"s ("+TotalHitNum(1)+")"+" [Right]"+strf("%.2f",hyouzi_PushedDur(2))+"s ("+TotalHitNum(2)+")"+" [Up]"+strf("%.2f",hyouzi_PushedDur(3))+"s ("+TotalHitNum(3)+")"    +" [Tab]"+strf("%.2f",hyouzi_PushedDur(4))+"s ("+TotalHitNum(4)+")"+" [Ctrl]"+strf("%.2f",hyouzi_PushedDur(5))+"s ("+TotalHitNum(5)+")"+" [Enter]"+strf("%.2f",hyouzi_PushedDur(6))+"s ("+TotalHitNum(6)+")  FPS:"+FPS
+	return
+	
+*exit
+	bsave "Name.bt",Name
+	bsave "PlaySpd.bt",PlaySpd
+	bsave "BinSec.bt",BinSec
+	end
